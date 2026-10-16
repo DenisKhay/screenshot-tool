@@ -143,6 +143,8 @@ class SnipperWindow(QWidget):
         self._border_alpha = 255
         self._drawing = False
         self._draw_start = None
+        self._last_rect = None
+        self._pre_draw_content = None
         self._drag_timer = None
 
         self._build_ui()
@@ -216,9 +218,10 @@ class SnipperWindow(QWidget):
             f"QToolButton:hover {{ background: rgba(55,71,79,240); }}")
         self.btn_11.clicked.connect(self.reset_scale)
         self.btn_bake = mkbtn(self.bar_right, "bake", "Bake: commit the resized scale into the image", self.bake_scale)
+        self.btn_redraw = mkbtn(self.bar_right, "redraw", "Close this rectangle and draw a new one", self.start_redraw)
         self.btn_reset = mkbtn(self.bar_right, "reset", "Reset: clear drawings, default size", self.reset)
         self.btn_full = mkbtn(self.bar_right, "full", "Fullscreen on the current monitor", self.toggle_fullscreen)
-        for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_reset, self.btn_full):
+        for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
             lay_r.addWidget(b)
 
         # actions (top edge): camera, copy, pin, opacity, history, close
@@ -333,23 +336,61 @@ class SnipperWindow(QWidget):
             lbl.width(), lbl.height())
 
     def open_at_cursor(self):
-        self.open_draw()
+        self.open_last()
+
+    def _enter_draw_mode(self):
+        if self._content is not None and not self._content.isNull() and self._content.width() > 0:
+            self._last_rect = QRect(self._content)
+        self._drawing = True
+        self._draw_start = None
+        self._pre_draw_content = None
+        self._content = QRect()
+        self.setCursor(Qt.CrossCursor)
+        self.size_label.hide()
+        self.relayout()
+        self._update_ui_state()
 
     def open_draw(self):
         """Activate in draw mode: crosshair, pull the rectangle from nothing."""
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
-        self._drawing = True
-        self._draw_start = None
-        self._content = QRect()
-        self.setCursor(Qt.CrossCursor)
         self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
-        self.relayout()
+        self._enter_draw_mode()
         self.show()
         self.raise_()
         self.activateWindow()
-        self.size_label.hide()
+
+    def open_last(self):
+        """Hotkey default: rectangle at its previous position, ready to use;
+        dragging on empty space draws a fresh one."""
+        self._end_session()
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
+        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
+        if self._last_rect is not None and not self._last_rect.isNull():
+            r = self._last_rect
+            r = r.intersected(QRect(QPoint(0, 0), self._desktop.size()))
+            if r.width() >= MIN_W // 2:
+                r.setWidth(max(MIN_W, r.width()))
+                r.setHeight(max(MIN_H, r.height()))
+            self._drawing = False
+            self._content = r
+            self.unsetCursor()
+            self.relayout()
+            self._refresh_size_label()
+            self._update_ui_state()
+        else:
+            self._enter_draw_mode()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if not self._drawing:
+            self._pulse_border()
+
+    def start_redraw(self):
+        """Close the current rectangle and draw a new one."""
+        self._enter_draw_mode()
 
     def open_at(self, cx: int, cy: int):
         """Open with a ready frame at the given point (scripting/tests)."""
@@ -647,6 +688,7 @@ class SnipperWindow(QWidget):
         self.btn_pin.setVisible(has_img)
         self.btn_11.setVisible(has_img)
         self.btn_bake.setVisible(has_img)
+        self.btn_redraw.setVisible(not self._drawing)
         self.btn_trash.setVisible(bool(self.history))
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
@@ -742,16 +784,27 @@ class SnipperWindow(QWidget):
             return
         r = QRect(start, pos).normalized()
         if r.width() < 12 or r.height() < 12:
-            # treat as a stray click: keep waiting for a real drag
-            self._content = QRect()
-            self.size_label.hide()
-            self.update()
+            # stray click: restore the previous rectangle if there was one
+            restore = self._pre_draw_content
+            self._pre_draw_content = None
+            if restore is not None and not restore.isNull():
+                self._drawing = False
+                self._content = restore
+                self.unsetCursor()
+                self.relayout()
+                self._refresh_size_label()
+                self._update_ui_state()
+            else:
+                self._content = QRect()
+                self.size_label.hide()
+                self.update()
             return
         if r.width() < MIN_W:
             r.setWidth(MIN_W)
         if r.height() < MIN_H:
             r.setHeight(MIN_H)
         self._drawing = False
+        self._pre_draw_content = None
         self._content = r
         self.unsetCursor()
         self.set_tool(TOOL_MOVE)
@@ -776,6 +829,14 @@ class SnipperWindow(QWidget):
         pos = e.position().toPoint()
         gpos = e.globalPosition().toPoint()
         if self._drawing:
+            self._draw_start = pos
+            self._content = QRect(pos, QSize(0, 0))
+            return
+        if not self._content.isNull() and not self._content.contains(pos):
+            # dragging on empty space: draw a fresh rectangle
+            keep = QRect(self._content)      # captured before the mode switch clears it
+            self._enter_draw_mode()
+            self._pre_draw_content = keep    # stray click restores the old rectangle
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
             return
@@ -1152,6 +1213,8 @@ class SnipperWindow(QWidget):
 
     def _dismiss(self):
         """Esc / ✕: hide. History is kept until cleared with the trash button."""
+        if not self._content.isNull() and self._content.width() > 0:
+            self._last_rect = QRect(self._content)
         self.hide()
 
     def _on_escape(self):

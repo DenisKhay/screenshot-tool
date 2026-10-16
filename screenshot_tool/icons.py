@@ -33,6 +33,8 @@ ICONS = {
               '<path d="M9 9v5M11 9v5"/>'),
     "bake": ('<rect x="3" y="3" width="14" height="14" rx="2"/>'
              '<path d="M6.5 10l2.5 2.5 4.5-5"/>'),
+    "redraw": ('<rect x="3" y="4" width="14" height="11" rx="1" stroke-dasharray="3 2.5"/>'
+               '<path d="M12 16l5-5"/><path d="M13.5 11H16v2.5"/>'),
     "width": ('<path d="M4 5h12" stroke-width="1.4"/>'
               '<path d="M4 10h12" stroke-width="2.8"/>'
               '<path d="M4 15h12" stroke-width="4.2"/>'),
