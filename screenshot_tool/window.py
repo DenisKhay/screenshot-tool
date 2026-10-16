@@ -45,8 +45,8 @@ BTN = 30    # icon button size
 GRIP = 10   # grip hit radius
 MIN_W, MIN_H = 240, 160
 
-TOOL_MOVE, TOOL_PEN, TOOL_ARROW, TOOL_RECT, TOOL_TEXT = range(5)
-TOOL_NAMES = ["move", "pen", "arrow", "rect", "text"]
+TOOL_DRAW, TOOL_MOVE, TOOL_PEN, TOOL_ARROW, TOOL_RECT, TOOL_TEXT = range(6)
+TOOL_NAMES = ["redraw", "move", "pen", "arrow", "rect", "text"]
 PALETTE = ["#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#ffffff", "#000000"]
 
 BTN_CSS = f"""
@@ -127,7 +127,7 @@ class SnipperWindow(QWidget):
         self._is_latest = False
         self._opacity = max(0.2, min(1.0, settings["default_opacity"] / 100))
 
-        self._tool = TOOL_MOVE
+        self._tool = TOOL_DRAW
         self._color = QColor(settings["color"])
         self._width = int(settings["stroke_width"])
         self._shapes = []
@@ -153,7 +153,7 @@ class SnipperWindow(QWidget):
         QShortcut(QKeySequence("Ctrl+Z"), self, self.undo)
         QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.hist_step(-1))
         QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.hist_step(1))
-        for key, t in (("m", TOOL_MOVE), ("p", TOOL_PEN), ("a", TOOL_ARROW),
+        for key, t in (("d", TOOL_DRAW), ("m", TOOL_MOVE), ("p", TOOL_PEN), ("a", TOOL_ARROW),
                        ("r", TOOL_RECT), ("t", TOOL_TEXT)):
             QShortcut(QKeySequence(key), self,
                       lambda t=t: None if self._text_editing else self.set_tool(t))
@@ -190,15 +190,16 @@ class SnipperWindow(QWidget):
         # tools (bottom edge): move, pen, arrow, rect, text, color, width
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
-        self.btn_move = mkbtn(self.bar_bottom, "move", "Move the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
+        self.btn_draw = mkbtn(self.bar_bottom, "redraw", "Draw a new rectangle (D) — default", lambda: self.set_tool(TOOL_DRAW), True)
+        self.btn_move = mkbtn(self.bar_bottom, "move", "Move / transform the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
         self.btn_pen = mkbtn(self.bar_bottom, "pen", "Pen (P)", lambda: self.set_tool(TOOL_PEN), True)
         self.btn_arrow = mkbtn(self.bar_bottom, "arrow", "Arrow (A)", lambda: self.set_tool(TOOL_ARROW), True)
         self.btn_rect = mkbtn(self.bar_bottom, "rect", "Rectangle (R)", lambda: self.set_tool(TOOL_RECT), True)
         self.btn_text = mkbtn(self.bar_bottom, "text", "Text (T)", lambda: self.set_tool(TOOL_TEXT), True)
-        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
+        for i, b in enumerate((self.btn_draw, self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
             self.tool_group.addButton(b, i)
             lay_b.addWidget(b)
-        self.btn_move.setChecked(True)
+        self.btn_draw.setChecked(True)
 
         self.btn_color = mkbtn(self.bar_bottom, "pen", "Stroke color", self._open_color_picker)
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
@@ -439,9 +440,13 @@ class SnipperWindow(QWidget):
         if self._text_editing:
             return
         self._tool = tool
-        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
+        for i, b in enumerate((self.btn_draw, self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
             b.setChecked(i == tool)
             b.setIcon(icons.svg_icon(TOOL_NAMES[i], icons.DARK if i == tool else icons.LIGHT))
+        if tool == TOOL_DRAW:
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.unsetCursor()
 
     def _refresh_text_style(self):
         self.text_edit.setStyleSheet(
@@ -637,7 +642,7 @@ class SnipperWindow(QWidget):
         self._is_latest = False
         self._opacity = max(0.2, min(1.0, self.settings["default_opacity"] / 100))
         self.opacity_slider.setValue(int(self._opacity * 100))
-        self.set_tool(TOOL_MOVE)
+        self.set_tool(TOOL_DRAW)
         self.btn_undo.setEnabled(False)
         if not self._fullscreen:
             self._content.setSize(QSize(self.settings["default_width"], self.settings["default_height"]))
@@ -677,7 +682,7 @@ class SnipperWindow(QWidget):
         view_hist = has_img and not self._is_latest
         tools_on = has_img and not view_hist and not self._pinned
 
-        for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text):
+        for b in (self.btn_draw, self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text):
             b.setEnabled(tools_on or not has_img)
         self.btn_color.setEnabled(tools_on or not has_img)
         self.btn_width.setEnabled(tools_on or not has_img)
@@ -806,7 +811,6 @@ class SnipperWindow(QWidget):
         self._drawing = False
         self._pre_draw_content = None
         self._content = r
-        self.unsetCursor()
         self.relayout()
         self._refresh_size_label()
         self._update_ui_state()
@@ -833,11 +837,19 @@ class SnipperWindow(QWidget):
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
             return
-        if not self._content.isNull() and not self._content.contains(pos):
-            # dragging on empty space: draw a fresh rectangle
-            keep = QRect(self._content)      # captured before the mode switch clears it
+        if self._tool == TOOL_DRAW and not self._content.isNull():
+            # draw-rect mode: a press anywhere starts a fresh rectangle
+            keep = QRect(self._content)
             self._enter_draw_mode()
             self._pre_draw_content = keep    # stray click restores the old rectangle
+            self._draw_start = pos
+            self._content = QRect(pos, QSize(0, 0))
+            return
+        if not self._content.isNull() and not self._content.contains(pos):
+            # other tools: dragging on empty space still draws a fresh rectangle
+            keep = QRect(self._content)
+            self._enter_draw_mode()
+            self._pre_draw_content = keep
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
             return
@@ -1110,6 +1122,7 @@ class SnipperWindow(QWidget):
         self._image_px = (crop.width(), crop.height())
         self._is_latest = True
         self._shapes = []
+        self.set_tool(TOOL_DRAW)
 
         self.show()
         self.raise_()
@@ -1196,8 +1209,7 @@ class SnipperWindow(QWidget):
         self._is_latest = idx == len(self.history) - 1
         self._shapes = []
         self._pending = None
-        self._tool = TOOL_MOVE
-        self.btn_move.setChecked(True)
+        self.set_tool(TOOL_DRAW)
         if not self._fullscreen:
             self._content.setSize(entry["logical"])
             self.relayout()
