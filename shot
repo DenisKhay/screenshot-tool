@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY="$DIR/.venv/bin/python"
+CMD="${1:-toggle}"
+CMD="${CMD#--}"
+export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+# Running instance? Just talk to it over the unix socket (stdlib-only, fast).
+if python3 -c 'import sys; from screenshot_tool.ipc import send_command; sys.exit(0 if send_command(sys.argv[1]) else 1)' "$CMD" 2>/dev/null; then
+  [ "$CMD" = "status" ] && echo "running" || echo "sent: $CMD"
+  exit 0
+fi
+
+case "$CMD" in
+  quit|status) echo "not running"; exit 0 ;;
+esac
+
+# Cold start inside a systemd user app-unit so the portal derives the
+# app-id "screenshot-tool" (the escaped dash matters) and honors the
+# permission-store grant — no interactive dialog, ever.
+UNIT='app-screenshot\x2dtool@'"$$.service"
+exec systemd-run --user --unit="$UNIT" --collect \
+  --setenv=QT_QPA_PLATFORM=xcb \
+  --setenv=DISPLAY="${DISPLAY:-:0}" \
+  --setenv=DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}" \
+  --setenv=PYTHONPATH="$DIR" \
+  "$PY" -m screenshot_tool "$CMD"
