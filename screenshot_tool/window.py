@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
+    QRegion,
     QCursor,
     QGuiApplication,
     QImage,
@@ -140,6 +141,10 @@ class SnipperWindow(QWidget):
         self._text_editing = False
         self._border_alpha = 255
         self._drag_timer = None
+        self._win_x = 0
+        self._win_y = 0
+        self._slack_l = 0
+        self._slack_t = 0
 
         self._build_ui()
 
@@ -288,10 +293,12 @@ class SnipperWindow(QWidget):
             coy, toy, win_h = 0, 6, ch
             tdx = max(4, cdx + (cw - tb_w) // 2)
 
+        cgl = self.mapToGlobal(self._content.topLeft())
+        self.setGeometry(cgl.x() - cdx, cgl.y() - coy, win_w, win_h)
         self._content.moveTopLeft(QPoint(cdx, coy))
         self.toolbar.setGeometry(tdx, toy, tb_w, TB_H)
-        self.setGeometry(self.x(), self.y(), win_w, win_h)
         self._place_size_label()
+        self._update_mask()
         self.update()
 
     def _place_size_label(self):
@@ -584,6 +591,7 @@ class SnipperWindow(QWidget):
         if corner:
             self._resize_corner = corner
             self._resize_ref = (gpos, self.content_global_rect())
+            self._begin_slack_resize(corner)
             return
         if not self._content.contains(pos):
             return
@@ -642,6 +650,8 @@ class SnipperWindow(QWidget):
         if self._resize_corner:
             self._resize_corner = None
             self._resize_ref = None
+            self._slack_l = 0
+            self._slack_t = 0
             self.relayout()
         if self._drag_offset is not None:
             self._drag_offset = None
@@ -651,6 +661,42 @@ class SnipperWindow(QWidget):
             self._pending = None
             self.btn_undo.setEnabled(True)
             self.update()
+
+    def _update_mask(self):
+        """Restrict window painting + input to frame, toolbar and label; clicks
+        elsewhere (e.g. the reserved slack) pass through to the desktop."""
+        region = QRegion(self._content.adjusted(-8, -8, 8, 8))
+        region = region.united(QRegion(self.toolbar.geometry()))
+        if self.size_label.isVisible():
+            region = region.united(QRegion(self.size_label.geometry()))
+        self.setMask(region)
+
+    def _begin_slack_resize(self, corner):
+        """Pre-reserve transparent slack toward the pulled sides so the window
+        top-left stays FROZEN for the whole drag. Invariant achieved: the
+        anchored corner keeps a constant position IN THE BUFFER, so even stale
+        composited frames show it exactly in place."""
+        _g0, cg0 = self._resize_ref
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        above = self._strip_mode == "above"
+        top_room = cg0.top() - vg.top() - (GAP + TB_H + PAD if above else PAD) - PAD
+        slack_l = max(0, min(cg0.left() - vg.left() - 2 * PAD, 1000)) if "l" in corner else 0
+        slack_t = max(0, min(top_room, 1000)) if "t" in corner else 0
+        self._slack_l, self._slack_t = int(slack_l), int(slack_t)
+
+        m_l = PAD + self._slack_l
+        m_t = (PAD + GAP + TB_H if above else PAD) + self._slack_t
+        cgl = self.mapToGlobal(cg0.topLeft())
+        self._win_x, self._win_y = cgl.x() - m_l, cgl.y() - m_t
+        tb_w = max(self.toolbar.sizeHint().width(), 40)
+        win_w = max(cg0.width(), tb_w) + m_l + PAD
+        win_h = cg0.height() + m_t + (PAD if above else GAP + TB_H + PAD)
+        self.setGeometry(self._win_x, self._win_y, win_w, win_h)
+        self._content.moveTopLeft(QPoint(m_l, m_t))
+        tdx = m_l + ((cg0.width() - tb_w) // 2 if tb_w <= cg0.width() else 0)
+        toy = (m_t - GAP - TB_H) if above else m_t + cg0.height() + GAP
+        self.toolbar.setGeometry(tdx, toy, tb_w, TB_H)
+        self._update_mask()
 
     def _do_resize(self, gpos):
         """Aspect-locked resize (with an image) anchored at the opposite corner.
@@ -664,6 +710,10 @@ class SnipperWindow(QWidget):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         lo_x, hi_x = vg.left() + PAD, vg.right() - PAD
         lo_y, hi_y = vg.top() + PAD, vg.bottom() - PAD
+        if self._slack_l:
+            lo_x = max(lo_x, self._win_x + PAD)
+        if self._slack_t:
+            lo_y = max(lo_y, self._win_y + PAD)
 
         iw = max(MIN_W, abs(gpos.x() - ax))
         ih = max(MIN_H, abs(gpos.y() - ay))
@@ -710,18 +760,22 @@ class SnipperWindow(QWidget):
                 ch = max(MIN_H, min(ih, hi_y - ay))
                 cgy = ay
 
+        # frozen window origin: the anchor corner keeps a constant BUFFER
+        # position (lx + cw == ax - win_x), so stale frames show it in place
         tb_w = max(self.toolbar.sizeHint().width(), 40)
         above = self._strip_mode == "above"
-        coy = GAP + TB_H + PAD if above else PAD
-        toy = PAD if above else PAD + ch + GAP
-        win_w = max(cw, tb_w) + 2 * PAD
-        win_h = ch + coy + (PAD if above else GAP + TB_H + PAD)
-        tdx = PAD + ((cw - tb_w) // 2 if tb_w <= cw else 0)
+        lx = cgx - self._win_x
+        ly = cgy - self._win_y
+        tdx = lx + ((cw - tb_w) // 2 if tb_w <= cw else 0)
+        toy = (ly - GAP - TB_H) if above else ly + ch + GAP
+        win_w = max(lx + cw, tdx + tb_w) + PAD
+        win_h = max(ly + ch + (PAD if above else GAP + TB_H + PAD), toy + TB_H + PAD) + (0 if above else 0)
 
-        self._content = QRect(QPoint(PAD, coy), QSize(cw, ch))
+        self._content = QRect(QPoint(lx, ly), QSize(cw, ch))
         self.toolbar.setGeometry(tdx, toy, tb_w, TB_H)
-        self.setGeometry(cgx - PAD, cgy - coy, win_w, win_h)
+        self.setGeometry(self._win_x, self._win_y, win_w, win_h)
         self._place_size_label()
+        self._update_mask()
         self.update()
 
     def contextMenuEvent(self, e):
