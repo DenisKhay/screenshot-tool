@@ -682,10 +682,11 @@ class SnipperWindow(QWidget):
         anchored corner keeps a constant position IN THE BUFFER, so even stale
         composited frames show it exactly in place."""
         _g0, cg0 = self._resize_ref
-        vg = QGuiApplication.primaryScreen().virtualGeometry()
-        above = self._strip_mode == "above"
-        top_room = cg0.top() - vg.top() - (GAP + TB_H + PAD if above else PAD) - PAD
-        slack_l = max(0, min(cg0.left() - vg.left() - 2 * PAD, 1000)) if "l" in corner else 0
+        scr = self.screen() or QGuiApplication.primaryScreen()
+        wa = scr.availableGeometry()  # workarea: mutter clamps windows into it,
+        above = self._strip_mode == "above"  # so slack must stay inside it too
+        top_room = cg0.top() - wa.top() - (GAP + TB_H + PAD if above else PAD) - PAD
+        slack_l = max(0, min(cg0.left() - wa.left() - 2 * PAD, 1000)) if "l" in corner else 0
         slack_t = max(0, min(top_room, 1000)) if "t" in corner else 0
         self._slack_l, self._slack_t = int(slack_l), int(slack_t)
 
