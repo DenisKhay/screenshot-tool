@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QFrame,
     QHBoxLayout,
+    QVBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -140,6 +141,8 @@ class SnipperWindow(QWidget):
         self._resize_ref = None
         self._text_editing = False
         self._border_alpha = 255
+        self._drawing = False
+        self._draw_start = None
         self._drag_timer = None
 
         self._build_ui()
@@ -157,88 +160,89 @@ class SnipperWindow(QWidget):
 
     # ---------- UI construction ----------
 
-    def _mkbtn(self, name, tip, cb, checkable=False):
-        b = QToolButton(self.toolbar)
-        b.setIcon(icons.svg_icon(name))
-        b.setIconSize(QSize(18, 18))
-        b.setFixedSize(BTN, BTN)
-        b.setToolTip(tip)
-        b.setCheckable(checkable)
-        b.clicked.connect(cb)
-        return b
-
     def _build_ui(self):
-        self.toolbar = QFrame(self)
-        self.toolbar.setStyleSheet(BTN_CSS)
-        lay = QHBoxLayout(self.toolbar)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(4)
+        self.bar_bottom = QFrame(self)
+        self.bar_top = QFrame(self)
+        self.bar_right = QFrame(self)
+        for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+            bar.setStyleSheet(BTN_CSS)
+        lay_b = QHBoxLayout(self.bar_bottom)
+        lay_t = QHBoxLayout(self.bar_top)
+        lay_r = QVBoxLayout(self.bar_right)
+        for lay in (lay_b, lay_t, lay_r):
+            lay.setContentsMargins(4, 4, 4, 4)
+            lay.setSpacing(4)
 
+        def mkbtn(parent, name, tip, cb, checkable=False):
+            b = QToolButton(parent)
+            b.setIcon(icons.svg_icon(name))
+            b.setIconSize(QSize(18, 18))
+            b.setFixedSize(BTN, BTN)
+            b.setToolTip(tip)
+            b.setCheckable(checkable)
+            b.clicked.connect(cb)
+            return b
+
+        self._mkbtn = lambda *a, **k: mkbtn(self.bar_bottom, *a, **k)
+
+        # tools (bottom edge): move, pen, arrow, rect, text, color, width
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
-        self.btn_move = self._mkbtn("move", "Move the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
-        self.btn_pen = self._mkbtn("pen", "Pen (P)", lambda: self.set_tool(TOOL_PEN), True)
-        self.btn_arrow = self._mkbtn("arrow", "Arrow (A)", lambda: self.set_tool(TOOL_ARROW), True)
-        self.btn_rect = self._mkbtn("rect", "Rectangle (R)", lambda: self.set_tool(TOOL_RECT), True)
-        self.btn_text = self._mkbtn("text", "Text (T)", lambda: self.set_tool(TOOL_TEXT), True)
+        self.btn_move = mkbtn(self.bar_bottom, "move", "Move the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
+        self.btn_pen = mkbtn(self.bar_bottom, "pen", "Pen (P)", lambda: self.set_tool(TOOL_PEN), True)
+        self.btn_arrow = mkbtn(self.bar_bottom, "arrow", "Arrow (A)", lambda: self.set_tool(TOOL_ARROW), True)
+        self.btn_rect = mkbtn(self.bar_bottom, "rect", "Rectangle (R)", lambda: self.set_tool(TOOL_RECT), True)
+        self.btn_text = mkbtn(self.bar_bottom, "text", "Text (T)", lambda: self.set_tool(TOOL_TEXT), True)
         for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
             self.tool_group.addButton(b, i)
-            lay.addWidget(b)
+            lay_b.addWidget(b)
         self.btn_move.setChecked(True)
 
-        self.btn_color = self._mkbtn("pen", "Stroke color", self._open_color_picker)
+        self.btn_color = mkbtn(self.bar_bottom, "pen", "Stroke color", self._open_color_picker)
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
-        lay.addWidget(self.btn_color)
+        lay_b.addWidget(self.btn_color)
+        self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._open_width_popup)
+        lay_b.addWidget(self.btn_width)
 
-        self.btn_width = self._mkbtn("width", "Stroke width", self._open_width_popup)
-        lay.addWidget(self.btn_width)
+        # adjust (right edge): undo, reset, fullscreen
+        self.btn_undo = mkbtn(self.bar_right, "undo", "Undo (Ctrl+Z)", self.undo)
+        self.btn_reset = mkbtn(self.bar_right, "reset", "Reset: clear drawings, default size", self.reset)
+        self.btn_full = mkbtn(self.bar_right, "full", "Expand to fullscreen / restore", self.toggle_fullscreen)
+        for b in (self.btn_undo, self.btn_reset, self.btn_full):
+            lay_r.addWidget(b)
 
-        self.btn_undo = self._mkbtn("undo", "Undo (Ctrl+Z)", self.undo)
-        lay.addWidget(self.btn_undo)
-
-        self.btn_reset = self._mkbtn("reset", "Reset: clear drawings, default size", self.reset)
-        lay.addWidget(self.btn_reset)
-
-        self.btn_full = self._mkbtn("full", "Expand to fullscreen / restore", self.toggle_fullscreen)
-        lay.addWidget(self.btn_full)
-
-        self.opacity_slider = QSlider(Qt.Horizontal, self.toolbar)
-        self.opacity_slider.setRange(20, 100)
-        self.opacity_slider.setValue(int(self._opacity * 100))
-        self.opacity_slider.setFixedWidth(64)
-        self.opacity_slider.setToolTip("Image opacity")
-        self.opacity_slider.valueChanged.connect(self._on_opacity)
-        lay.addWidget(self.opacity_slider)
-
-        self.btn_pin = self._mkbtn("pin", "Pin on top (hide chrome)", self.toggle_pin, True)
-        lay.addWidget(self.btn_pin)
-
-        self.btn_copy = self._mkbtn("copy", "Copy image to clipboard", self.copy_image)
-        lay.addWidget(self.btn_copy)
-
-        self.btn_prev = self._mkbtn("prev", "Previous capture (←)", lambda: self.hist_step(-1))
-        self.hist_label = QLabel("0/0", self.toolbar)
-        self.hist_label.setStyleSheet(f"QLabel {{ color: {CHROME_FG}; font-size: 11px; background: transparent; }}")
-        self.btn_next = self._mkbtn("next", "Next capture (→)", lambda: self.hist_step(1))
-        lay.addWidget(self.btn_prev)
-        lay.addWidget(self.hist_label)
-        lay.addWidget(self.btn_next)
-
-        lay.addStretch(1)
-        self.btn_close = self._mkbtn("close", "Hide and clear session history (Esc)", self._dismiss)
-        lay.addWidget(self.btn_close)
-
-        self.capture_btn = QToolButton(self.toolbar)
+        # actions (top edge): camera, copy, pin, opacity, history, close
+        self.capture_btn = QToolButton(self.bar_top)
         self.capture_btn.setIcon(icons.svg_icon("camera", "#ffffff"))
         self.capture_btn.setIconSize(QSize(20, 20))
         self.capture_btn.setFixedSize(34, 34)
         self.capture_btn.setStyleSheet(CAPTURE_CSS)
         self.capture_btn.setToolTip("Capture: save to folder + clipboard (hold to drag the shot)")
         self.capture_btn.pressed.connect(self._on_capture_pressed)
-        if "left" in str(self.settings["capture_button_corner"]):
-            lay.insertWidget(0, self.capture_btn)
-        else:
-            lay.addWidget(self.capture_btn)
+        lay_t.addWidget(self.capture_btn)
+
+        self.btn_copy = mkbtn(self.bar_top, "copy", "Copy image to clipboard", self.copy_image)
+        lay_t.addWidget(self.btn_copy)
+        self.btn_pin = mkbtn(self.bar_top, "pin", "Pin on top (hide chrome)", self.toggle_pin, True)
+        lay_t.addWidget(self.btn_pin)
+
+        self.opacity_slider = QSlider(Qt.Horizontal, self.bar_top)
+        self.opacity_slider.setRange(20, 100)
+        self.opacity_slider.setValue(int(self._opacity * 100))
+        self.opacity_slider.setFixedWidth(64)
+        self.opacity_slider.setToolTip("Image opacity")
+        self.opacity_slider.valueChanged.connect(self._on_opacity)
+        lay_t.addWidget(self.opacity_slider)
+
+        self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
+        self.hist_label = QLabel("0/0", self.bar_top)
+        self.hist_label.setStyleSheet(f"QLabel {{ color: {CHROME_FG}; font-size: 11px; background: transparent; }}")
+        self.btn_next = mkbtn(self.bar_top, "next", "Next capture (→)", lambda: self.hist_step(1))
+        lay_t.addWidget(self.btn_prev)
+        lay_t.addWidget(self.hist_label)
+        lay_t.addWidget(self.btn_next)
+        self.btn_close = mkbtn(self.bar_top, "close", "Hide and clear session history (Esc)", self._dismiss)
+        lay_t.addWidget(self.btn_close)
 
         self.size_label = QLabel(self)
         self.size_label.setStyleSheet(LABEL_CSS)
@@ -261,25 +265,48 @@ class SnipperWindow(QWidget):
                      self._content.size())
 
     def relayout(self):
-        """Position children inside the fixed desktop-sized window; the window
-        itself NEVER moves or resizes during interaction (pure painting)."""
+        """Place the edge bars around the frame inside the fixed overlay
+        window. Bottom = tools, top = actions, right = adjust; each flips
+        inside the frame when there is no room outside."""
+        if self._drawing:
+            self.bar_bottom.hide()
+            self.bar_top.hide()
+            self.bar_right.hide()
+            self.clearMask()
+            self.update()
+            return
+
+        for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+            bar.show()
+
         cw, ch = self._content.width(), self._content.height()
-        tb_w = max(self.toolbar.sizeHint().width(), 40)
+        d_w, d_h = self._desktop.width(), self._desktop.height()
 
-        if self._fullscreen:
-            mode = "inside"
-        else:
-            below = self._content.bottom() + GAP + TB_H + PAD <= self._desktop.height()
-            above = self._content.top() - GAP - TB_H - PAD >= 0
-            mode = "below" if below else ("above" if above else "inside")
-        self._strip_mode = mode
+        bb = self.bar_bottom.sizeHint(); bb.setWidth(max(bb.width(), 40)); bb.setHeight(TB_H)
+        tb = self.bar_top.sizeHint(); tb.setWidth(max(tb.width(), 40)); tb.setHeight(TB_H)
+        rb = self.bar_right.sizeHint(); rb.setWidth(TB_H); rb.setHeight(max(rb.height(), 40))
 
-        tdx = self._content.x() + ((cw - tb_w) // 2 if tb_w <= cw else 0)
-        toy = (self._content.top() - GAP - TB_H) if mode == "above" else self._content.bottom() + GAP
-        if mode == "inside":
-            tdx = max(4, self._content.x() + (cw - tb_w) // 2)
-            toy = self._content.top() + 6
-        self.toolbar.setGeometry(tdx, max(0, toy), tb_w, TB_H)
+        # bottom bar: outside below, else inside the bottom edge
+        bx = max(0, min(self._content.center().x() - bb.width() // 2, d_w - bb.width()))
+        by = self._content.bottom() + GAP
+        if by + bb.height() > d_h:
+            by = self._content.bottom() - bb.height() - 4
+        self.bar_bottom.setGeometry(bx, by, bb.width(), bb.height())
+
+        # top bar: outside above, else inside the top edge
+        tx = max(0, min(self._content.center().x() - tb.width() // 2, d_w - tb.width()))
+        ty = self._content.top() - GAP - tb.height()
+        if ty < 0:
+            ty = self._content.top() + 4
+        self.bar_top.setGeometry(tx, ty, tb.width(), tb.height())
+
+        # right bar: outside right, vertically centered, else inside the edge
+        ry = max(0, min(self._content.center().y() - rb.height() // 2, d_h - rb.height()))
+        rx = self._content.right() + GAP
+        if rx + rb.width() > d_w:
+            rx = self._content.right() - rb.width() - 4
+        self.bar_right.setGeometry(rx, ry, rb.width(), rb.height())
+
         self._place_size_label()
         self._update_mask()
         self.update()
@@ -294,11 +321,31 @@ class SnipperWindow(QWidget):
             lbl.width(), lbl.height())
 
     def open_at_cursor(self):
-        self.open_at(QCursor.pos().x(), QCursor.pos().y())
+        self.open_draw()
 
-    def open_at(self, cx: int, cy: int):
+    def open_draw(self):
+        """Activate in draw mode: crosshair, pull the rectangle from nothing."""
+        self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
+        self._drawing = True
+        self._draw_start = None
+        self._content = QRect()
+        self.setCursor(Qt.CrossCursor)
+        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
+        self.relayout()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.size_label.hide()
+
+    def open_at(self, cx: int, cy: int):
+        """Open with a ready frame at the given point (scripting/tests)."""
+        self._end_session()
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
+        self._drawing = False
+        self._draw_start = None
         self._fullscreen = False
         self._pinned = False
         self.btn_pin.setChecked(False)
@@ -307,12 +354,24 @@ class SnipperWindow(QWidget):
         x = max(PAD, min(cx - w // 2 - vg.x(), self._desktop.width() - w - PAD))
         y = max(PAD, min(cy - h // 2 - vg.y(), self._desktop.height() - h - TB_H - GAP - 2 * PAD))
         self._content = QRect(QPoint(x, y), QSize(w, h))
+        self.unsetCursor()
         self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
         self.relayout()
         self.show()
         self.raise_()
         self.activateWindow()
         self._pulse_border()
+
+    def _end_session(self):
+        self.history = []
+        self._hist_idx = -1
+        self._shapes = []
+        self._pending = None
+        self._image = None
+        self._is_latest = False
+        if self._text_editing:
+            self._close_text_editor()
+        self._update_ui_state()
 
     def _pulse_border(self):
         seq = [90, 255, 90, 255, 90, 255]
@@ -477,7 +536,6 @@ class SnipperWindow(QWidget):
         self.btn_color.setEnabled(tools_on or not has_img)
         self.btn_width.setEnabled(tools_on or not has_img)
         self.btn_undo.setEnabled(bool(self._shapes))
-        self.btn_full.setEnabled(not self._pinned)
 
         self.btn_copy.setVisible(has_img)
         self.opacity_slider.setVisible(has_img)
@@ -485,10 +543,19 @@ class SnipperWindow(QWidget):
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
-        self.hist_label.setVisible(bool(self.history))
-        self.btn_prev.setVisible(bool(self.history))
-        self.btn_next.setVisible(bool(self.history))
+        hist_on = bool(self.history)
+        self.hist_label.setVisible(hist_on)
+        self.btn_prev.setVisible(hist_on)
+        self.btn_next.setVisible(hist_on)
+
         self.capture_btn.setVisible(not self._pinned)
+        if self._drawing:
+            for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+                bar.hide()
+        else:
+            self.bar_bottom.setVisible(not self._pinned)
+            self.bar_right.setVisible(not self._pinned)
+            # top bar stays: pin toggle + close remain reachable while pinned
         if has_img:
             self.opacity_slider.setValue(int(self._opacity * 100))
 
@@ -498,6 +565,24 @@ class SnipperWindow(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         c = self._content
+
+        if self._drawing:
+            if not self._content.isNull():
+                # dim everything outside the rect being pulled
+                outside = QRegion(self.rect()).subtracted(QRegion(self._content))
+                p.setClipRegion(outside)
+                p.fillRect(self.rect(), QColor(0, 0, 0, 70))
+                p.setClipping(False)
+                pen = QPen(QColor(ACCENT), 2)
+                p.setPen(pen)
+                p.drawRect(self._content.adjusted(1, 1, -1, -1))
+            else:
+                p.setPen(QColor(255, 255, 255, 120))
+                f = p.font()
+                f.setPixelSize(15)
+                p.setFont(f)
+                p.drawText(self.rect(), Qt.AlignCenter, "Draw the area: press and drag")
+            return
 
         if self._image is not None:
             p.setOpacity(self._opacity)
@@ -542,6 +627,31 @@ class SnipperWindow(QWidget):
 
     # ---------- interaction ----------
 
+    def _finish_draw(self, pos: QPoint):
+        start = self._draw_start
+        self._draw_start = None
+        if start is None:
+            return
+        r = QRect(start, pos).normalized()
+        if r.width() < 12 or r.height() < 12:
+            # treat as a stray click: keep waiting for a real drag
+            self._content = QRect()
+            self.size_label.hide()
+            self.update()
+            return
+        if r.width() < MIN_W:
+            r.setWidth(MIN_W)
+        if r.height() < MIN_H:
+            r.setHeight(MIN_H)
+        self._drawing = False
+        self._content = r
+        self.unsetCursor()
+        self.set_tool(TOOL_MOVE)
+        self.relayout()
+        self._refresh_size_label()
+        self._update_ui_state()
+        self._pulse_border()
+
     def _grip_at(self, pos: QPoint):
         if self._pinned:
             return None
@@ -557,6 +667,10 @@ class SnipperWindow(QWidget):
             return
         pos = e.position().toPoint()
         gpos = e.globalPosition().toPoint()
+        if self._drawing:
+            self._draw_start = pos
+            self._content = QRect(pos, QSize(0, 0))
+            return
         corner = self._grip_at(pos)
         if corner:
             self._resize_corner = corner
@@ -587,6 +701,13 @@ class SnipperWindow(QWidget):
         pos = e.position().toPoint()
         gpos = e.globalPosition().toPoint()
 
+        if self._drawing:
+            if self._draw_start is not None:
+                self._content = QRect(self._draw_start, pos).normalized()
+                self._place_size_label()
+                self.size_label.show()
+                self.update()
+            return
         if self._resize_corner and self._resize_ref:
             self._do_resize(pos)
             return
@@ -616,6 +737,9 @@ class SnipperWindow(QWidget):
             self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, e):
+        if self._drawing:
+            self._finish_draw(e.position().toPoint())
+            return
         if self._resize_corner:
             self._resize_corner = None
             self._resize_ref = None
@@ -633,7 +757,8 @@ class SnipperWindow(QWidget):
         """Restrict window painting + input to frame, toolbar and label; clicks
         elsewhere (the rest of the overlay) pass through to the desktop."""
         region = QRegion(self._content.adjusted(-8, -8, 8, 8))
-        region = region.united(QRegion(self.toolbar.geometry()))
+        for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+            region = region.united(QRegion(bar.geometry()))
         if self.size_label.isVisible():
             region = region.united(QRegion(self.size_label.geometry()))
         self.setMask(region)
@@ -913,6 +1038,8 @@ class SnipperWindow(QWidget):
     def _on_escape(self):
         if self._text_editing:
             self._cancel_text()
+        elif self._drawing:
+            self._dismiss()
         elif self._pinned:
             self.toggle_pin()
         else:
