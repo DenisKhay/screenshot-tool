@@ -145,6 +145,8 @@ class SnipperWindow(QWidget):
         self._win_y = 0
         self._slack_l = 0
         self._slack_t = 0
+        self._last_cgx = 0
+        self._last_cgy = 0
 
         self._build_ui()
 
@@ -259,7 +261,10 @@ class SnipperWindow(QWidget):
     # ---------- geometry ----------
 
     def content_global_rect(self) -> QRect:
-        return QRect(self.mapToGlobal(self._content.topLeft()), self._content.size())
+        # from REQUESTED geometry: mapToGlobal can lag behind the WM-acked
+        # position right after moves/resizes and must not drive placement
+        return QRect(QPoint(self.x() + self._content.x(), self.y() + self._content.y()),
+                     self._content.size())
 
     def _screen_rect(self) -> QRect:
         scr = self.screen() or QGuiApplication.primaryScreen()
@@ -269,8 +274,7 @@ class SnipperWindow(QWidget):
         cw, ch = self._content.width(), self._content.height()
         tb_w = max(self.toolbar.sizeHint().width(), 40)
         sg = self._screen_rect()
-        gtl = self.mapToGlobal(QPoint(0, 0))
-        content_top = gtl.y() + self._content.y()
+        content_top = self.y() + self._content.y()
         pad = 0 if self._fullscreen else PAD
 
         if self._fullscreen:
@@ -293,8 +297,9 @@ class SnipperWindow(QWidget):
             coy, toy, win_h = 0, 6, ch
             tdx = max(4, cdx + (cw - tb_w) // 2)
 
-        cgl = self.mapToGlobal(self._content.topLeft())
-        self.setGeometry(cgl.x() - cdx, cgl.y() - coy, win_w, win_h)
+        cgl_x = self.x() + self._content.x()
+        cgl_y = self.y() + self._content.y()
+        self.setGeometry(cgl_x - cdx, cgl_y - coy, win_w, win_h)
         self._content.moveTopLeft(QPoint(cdx, coy))
         self.toolbar.setGeometry(tdx, toy, tb_w, TB_H)
         self._place_size_label()
@@ -686,17 +691,21 @@ class SnipperWindow(QWidget):
 
         m_l = PAD + self._slack_l
         m_t = (PAD + GAP + TB_H if above else PAD) + self._slack_t
-        cgl = self.mapToGlobal(cg0.topLeft())
-        self._win_x, self._win_y = cgl.x() - m_l, cgl.y() - m_t
+        cg = self.content_global_rect()
+        self._win_x, self._win_y = cg.x() - m_l, cg.y() - m_t
         tb_w = max(self.toolbar.sizeHint().width(), 40)
-        win_w = max(cg0.width(), tb_w) + m_l + PAD
-        win_h = cg0.height() + m_t + (PAD if above else GAP + TB_H + PAD)
+        win_w = max(cg.width(), tb_w) + m_l + PAD
+        win_h = cg.height() + m_t + (PAD if above else GAP + TB_H + PAD)
         self.setGeometry(self._win_x, self._win_y, win_w, win_h)
         self._content.moveTopLeft(QPoint(m_l, m_t))
-        tdx = m_l + ((cg0.width() - tb_w) // 2 if tb_w <= cg0.width() else 0)
-        toy = (m_t - GAP - TB_H) if above else m_t + cg0.height() + GAP
+        tdx = m_l + ((cg.width() - tb_w) // 2 if tb_w <= cg.width() else 0)
+        toy = (m_t - GAP - TB_H) if above else m_t + cg.height() + GAP
         self.toolbar.setGeometry(tdx, toy, tb_w, TB_H)
         self._update_mask()
+
+        # the WM may apply the resize but override the position; re-anchor the
+        # frozen origin to what it actually applied (content global preserved)
+        self._last_cgx, self._last_cgy = cg.x(), cg.y()
 
     def _do_resize(self, gpos):
         """Aspect-locked resize (with an image) anchored at the opposite corner.
@@ -760,8 +769,16 @@ class SnipperWindow(QWidget):
                 ch = max(MIN_H, min(ih, hi_y - ay))
                 cgy = ay
 
-        # frozen window origin: the anchor corner keeps a constant BUFFER
-        # position (lx + cw == ax - win_x), so stale frames show it in place
+        self._content.setSize(QSize(cw, ch))
+        self._last_cgx, self._last_cgy = cgx, cgy
+        self._apply_drag_geometry()
+
+    def _apply_drag_geometry(self):
+        """Place content/toolbar from the frozen origin. The anchor corner keeps
+        a constant BUFFER position (lx + cw == ax - win_x), so stale composited
+        frames show it exactly in place."""
+        cw, ch = self._content.width(), self._content.height()
+        cgx, cgy = self._last_cgx, self._last_cgy
         tb_w = max(self.toolbar.sizeHint().width(), 40)
         above = self._strip_mode == "above"
         lx = cgx - self._win_x
@@ -769,7 +786,7 @@ class SnipperWindow(QWidget):
         tdx = lx + ((cw - tb_w) // 2 if tb_w <= cw else 0)
         toy = (ly - GAP - TB_H) if above else ly + ch + GAP
         win_w = max(lx + cw, tdx + tb_w) + PAD
-        win_h = max(ly + ch + (PAD if above else GAP + TB_H + PAD), toy + TB_H + PAD) + (0 if above else 0)
+        win_h = max(ly + ch + (PAD if above else GAP + TB_H + PAD), toy + TB_H + PAD)
 
         self._content = QRect(QPoint(lx, ly), QSize(cw, ch))
         self.toolbar.setGeometry(tdx, toy, tb_w, TB_H)
@@ -777,6 +794,15 @@ class SnipperWindow(QWidget):
         self._place_size_label()
         self._update_mask()
         self.update()
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        # During a drag: if the WM placed us somewhere other than the frozen
+        # origin (configure override), adopt the real position and re-apply so
+        # the anchor invariant holds against actuality.
+        if self._resize_corner and (e.pos().x() != self._win_x or e.pos().y() != self._win_y):
+            self._win_x, self._win_y = e.pos().x(), e.pos().y()
+            self._apply_drag_geometry()
 
     def contextMenuEvent(self, e):
         menu = QMenu(self)
