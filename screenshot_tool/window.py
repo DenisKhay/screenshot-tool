@@ -807,11 +807,12 @@ class SnipperWindow(QWidget):
         self._pre_draw_content = None
         self._content = r
         self.unsetCursor()
-        self.set_tool(TOOL_MOVE)
         self.relayout()
         self._refresh_size_label()
         self._update_ui_state()
         self._pulse_border()
+        # drawn rectangle = captured automatically
+        QTimer.singleShot(150, self.do_capture)
 
     def _grip_at(self, pos: QPoint):
         if self._pinned:
@@ -1109,8 +1110,6 @@ class SnipperWindow(QWidget):
         self._image_px = (crop.width(), crop.height())
         self._is_latest = True
         self._shapes = []
-        self._tool = TOOL_MOVE
-        self.btn_move.setChecked(True)
 
         self.show()
         self.raise_()
