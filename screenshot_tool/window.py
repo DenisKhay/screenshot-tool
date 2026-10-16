@@ -483,8 +483,39 @@ class SnipperWindow(QWidget):
             return
         if self._shapes:
             self._shapes.pop()
-            self.btn_undo.setEnabled(bool(self._shapes))
+            self.btn_undo.setEnabled(bool(self._shapes) or self._imprints())
             self.update()
+            return
+        entry = self._current_entry()
+        if entry and entry.get("imprints"):
+            entry["imprints"].pop()
+            self._rebuild_imprinted(entry)
+
+    def _current_entry(self):
+        if self.history and 0 <= self._hist_idx < len(self.history):
+            return self.history[self._hist_idx]
+        return None
+
+    def _imprints(self):
+        entry = self._current_entry()
+        return entry.get("imprints", []) if entry else []
+
+    def _paint_imprint(self, painter, shape):
+        sx = self._image.width() / max(1, self._content.width())
+        sy = self._image.height() / max(1, self._content.height())
+        painter.scale(sx, sy)
+        shape.draw(painter)
+
+    def _rebuild_imprinted(self, entry):
+        img = entry["base"].copy()
+        p = QPainter(img)
+        for shape in entry["imprints"]:
+            self._paint_imprint(p, shape)
+        p.end()
+        entry["image"] = img
+        self._image = img
+        self.btn_undo.setEnabled(bool(entry["imprints"]))
+        self.update()
 
     def reset(self):
         """Clear drawings and return the frame to its pristine state."""
@@ -748,9 +779,20 @@ class SnipperWindow(QWidget):
             self._drag_offset = None
             self.relayout()
         if self._pending is not None:
-            self._shapes.append(self._pending)
+            shape = self._pending
             self._pending = None
-            self.btn_undo.setEnabled(True)
+            entry = self._current_entry()
+            if self._image is not None and self._is_latest and entry is not None:
+                # print the finished shape straight into the captured image
+                p = QPainter(self._image)
+                self._paint_imprint(p, shape)
+                p.end()
+                entry["image"] = self._image
+                entry.setdefault("imprints", []).append(shape)
+                self.btn_undo.setEnabled(True)
+            else:
+                self._shapes.append(shape)
+                self.btn_undo.setEnabled(True)
             self.update()
 
     def _update_mask(self):
@@ -914,7 +956,8 @@ class SnipperWindow(QWidget):
         except OSError:
             pass
 
-        self.history.append({"image": crop, "path": path,
+        self.history.append({"image": crop, "base": crop.copy(), "imprints": [],
+                             "path": path,
                              "logical": QSize(self._content.width(), self._content.height())})
         limit = int(self.settings["history_limit"])
         if len(self.history) > limit:
