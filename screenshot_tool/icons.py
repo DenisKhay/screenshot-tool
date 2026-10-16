@@ -29,6 +29,10 @@ ICONS = {
     "close": '<path d="M5 5l10 10M15 5L5 15"/>',
     "camera": ('<rect x="3" y="6" width="14" height="10" rx="2"/><path d="M7 6l1-2h4l1 2"/>'
                '<circle cx="10" cy="11" r="3"/>'),
+    "trash": ('<path d="M4 6h12"/><path d="M8 6V4h4v2"/><path d="M6 6l1 11h6l1-11"/>'
+              '<path d="M9 9v5M11 9v5"/>'),
+    "bake": ('<rect x="3" y="3" width="14" height="14" rx="2"/>'
+             '<path d="M6.5 10l2.5 2.5 4.5-5"/>'),
     "width": ('<path d="M4 5h12" stroke-width="1.4"/>'
               '<path d="M4 10h12" stroke-width="2.8"/>'
               '<path d="M4 15h12" stroke-width="4.2"/>'),

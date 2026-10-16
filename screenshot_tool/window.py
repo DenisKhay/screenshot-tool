@@ -204,11 +204,21 @@ class SnipperWindow(QWidget):
         self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._open_width_popup)
         lay_b.addWidget(self.btn_width)
 
-        # adjust (right edge): undo, reset, fullscreen
+        # adjust (right edge): undo, 1:1, bake, reset, fullscreen
         self.btn_undo = mkbtn(self.bar_right, "undo", "Undo (Ctrl+Z)", self.undo)
+        self.btn_11 = QToolButton(self.bar_right)
+        self.btn_11.setText("1:1")
+        self.btn_11.setFixedSize(BTN, BTN)
+        self.btn_11.setToolTip("Reset scale: frame shows the image pixel-per-pixel")
+        self.btn_11.setStyleSheet(
+            f"QToolButton {{ background: rgba(38,50,56,215); border: none; border-radius: 6px;"
+            f" color: {CHROME_FG}; font-size: 10px; font-weight: bold; }}"
+            f"QToolButton:hover {{ background: rgba(55,71,79,240); }}")
+        self.btn_11.clicked.connect(self.reset_scale)
+        self.btn_bake = mkbtn(self.bar_right, "bake", "Bake: commit the resized scale into the image", self.bake_scale)
         self.btn_reset = mkbtn(self.bar_right, "reset", "Reset: clear drawings, default size", self.reset)
-        self.btn_full = mkbtn(self.bar_right, "full", "Expand to fullscreen / restore", self.toggle_fullscreen)
-        for b in (self.btn_undo, self.btn_reset, self.btn_full):
+        self.btn_full = mkbtn(self.bar_right, "full", "Fullscreen on the current monitor", self.toggle_fullscreen)
+        for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_reset, self.btn_full):
             lay_r.addWidget(b)
 
         # actions (top edge): camera, copy, pin, opacity, history, close
@@ -241,7 +251,9 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_prev)
         lay_t.addWidget(self.hist_label)
         lay_t.addWidget(self.btn_next)
-        self.btn_close = mkbtn(self.bar_top, "close", "Hide and clear session history (Esc)", self._dismiss)
+        self.btn_trash = mkbtn(self.bar_top, "trash", "Clear history (manual)", self.clear_history)
+        lay_t.addWidget(self.btn_trash)
+        self.btn_close = mkbtn(self.bar_top, "close", "Hide (Esc)", self._dismiss)
         lay_t.addWidget(self.btn_close)
 
         self.size_label = QLabel(self)
@@ -363,8 +375,6 @@ class SnipperWindow(QWidget):
         self._pulse_border()
 
     def _end_session(self):
-        self.history = []
-        self._hist_idx = -1
         self._shapes = []
         self._pending = None
         self._image = None
@@ -517,6 +527,48 @@ class SnipperWindow(QWidget):
         self.btn_undo.setEnabled(bool(entry["imprints"]))
         self.update()
 
+    def reset_scale(self):
+        """1:1: size the frame to the image's real pixels."""
+        if self._image is None:
+            return
+        w = min(self._image.width(), self._desktop.width() - 2 * PAD)
+        h = min(self._image.height(), self._desktop.height() - TB_H - 3 * PAD)
+        self._content.setSize(QSize(w, h))
+        self.relayout()
+        self._refresh_size_label()
+
+    def bake_scale(self):
+        """Bake the current display scale into the image (resample), clearing
+        the imprint undo stack — they are now part of the pixels."""
+        if self._image is None:
+            return
+        cw, ch = self._content.width(), self._content.height()
+        img = QImage(cw, ch, QImage.Format.Format_ARGB32)
+        img.fill(Qt.GlobalColor.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.drawImage(QRect(0, 0, cw, ch), self._image)
+        p.end()
+        self._image = img
+        entry = self._current_entry()
+        if entry is not None:
+            entry["image"] = img
+            entry["base"] = img.copy()
+            entry["imprints"] = []
+            entry["logical"] = QSize(cw, ch)
+        self.btn_undo.setEnabled(False)
+        self._refresh_size_label()
+        self.update()
+
+    def clear_history(self):
+        self.history = []
+        self._hist_idx = -1
+        self._image = None
+        self._image_px = None
+        self._is_latest = False
+        self._update_ui_state()
+        self.relayout()
+
     def reset(self):
         """Clear drawings and return the frame to its pristine state."""
         if self._text_editing:
@@ -548,13 +600,19 @@ class SnipperWindow(QWidget):
         self.relayout()
 
     def toggle_fullscreen(self):
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
         if self._fullscreen:
             self._fullscreen = False
             self._content = QRect(self._pre_fs)
         else:
+            center_global = QPoint(vg.x() + self._content.center().x(),
+                                   vg.y() + self._content.center().y())
+            scr = QGuiApplication.screenAt(center_global) or QGuiApplication.primaryScreen()
+            sg = scr.geometry()
             self._pre_fs = QRect(self._content)
             self._fullscreen = True
-            self._content = QRect(QPoint(0, 0), QSize(self._desktop.width(), self._desktop.height()))
+            self._content = QRect(QPoint(sg.x() - vg.x(), sg.y() - vg.y()),
+                                  QSize(sg.width(), sg.height()))
         self.relayout()
 
     def _update_ui_state(self):
@@ -571,6 +629,9 @@ class SnipperWindow(QWidget):
         self.btn_copy.setVisible(has_img)
         self.opacity_slider.setVisible(has_img)
         self.btn_pin.setVisible(has_img)
+        self.btn_11.setVisible(has_img)
+        self.btn_bake.setVisible(has_img)
+        self.btn_trash.setVisible(bool(self.history))
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
@@ -1071,11 +1132,7 @@ class SnipperWindow(QWidget):
     # ---------- misc ----------
 
     def _dismiss(self):
-        """Esc / ✕: hide and end the capture session (clears in-session history;
-        saved files on disk are untouched)."""
-        self.history = []
-        self._hist_idx = -1
-        self._update_ui_state()
+        """Esc / ✕: hide. History is kept until cleared with the trash button."""
         self.hide()
 
     def _on_escape(self):
