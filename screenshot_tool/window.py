@@ -524,8 +524,19 @@ class SnipperWindow(QWidget):
         p.end()
         entry["image"] = img
         self._image = img
+        QApplication.clipboard().setImage(img)
         self.btn_undo.setEnabled(bool(entry["imprints"]))
         self.update()
+
+    def _persist_baked(self, img: QImage):
+        """Baked images get re-saved as a new copy and pushed to the clipboard."""
+        try:
+            path = self._save_image(img)
+        except Exception:
+            log.exception("bake save failed")
+            return None
+        QApplication.clipboard().setImage(img)
+        return path
 
     def reset_scale(self):
         """1:1: size the frame to the image's real pixels."""
@@ -556,6 +567,11 @@ class SnipperWindow(QWidget):
             entry["base"] = img.copy()
             entry["imprints"] = []
             entry["logical"] = QSize(cw, ch)
+            new_path = self._persist_baked(img)
+            if new_path:
+                entry["path"] = new_path
+        else:
+            self._persist_baked(img)
         self.btn_undo.setEnabled(False)
         self._refresh_size_label()
         self.update()
@@ -850,6 +866,9 @@ class SnipperWindow(QWidget):
                 p.end()
                 entry["image"] = self._image
                 entry.setdefault("imprints", []).append(shape)
+                new_path = self._persist_baked(self._image)
+                if new_path:
+                    entry["path"] = new_path
                 self.btn_undo.setEnabled(True)
             else:
                 self._shapes.append(shape)
