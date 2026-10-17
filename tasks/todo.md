@@ -58,6 +58,12 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       (A-arrows button next to T, enabled only for the text tool,
       8..96px jump slider + live "Aa" preview); TextShape takes a real
       pixel size. settings key: text_size (default 18).
+- [x] Text editor: releasable — click-away commits and is consumed (the
+      click used to fall through to the text tool and instantly reopen
+      an editor); switching tools commits; Esc cancels. While focused
+      it DRAGS to reposition (TextEditor: plain click = caret, drag =
+      move); commit uses the dragged position. debug IPC: dumps state
+      to the journal.
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
