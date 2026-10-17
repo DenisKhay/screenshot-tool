@@ -170,6 +170,7 @@ class SnipperWindow(QWidget):
         self.bar_right = QFrame(self)
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
             bar.setStyleSheet(BTN_CSS)
+            bar.setCursor(Qt.ArrowCursor)
         lay_b = QHBoxLayout(self.bar_bottom)
         lay_t = QHBoxLayout(self.bar_top)
         lay_r = QVBoxLayout(self.bar_right)
@@ -184,6 +185,7 @@ class SnipperWindow(QWidget):
             b.setFixedSize(BTN, BTN)
             b.setToolTip(tip)
             b.setCheckable(checkable)
+            b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(cb)
             return b
 
@@ -233,6 +235,7 @@ class SnipperWindow(QWidget):
         self.capture_btn.setFixedSize(34, 34)
         self.capture_btn.setStyleSheet(CAPTURE_CSS)
         self.capture_btn.setToolTip("Capture: save to folder + clipboard (hold to drag the shot)")
+        self.capture_btn.setCursor(Qt.PointingHandCursor)
         self.capture_btn.pressed.connect(self._on_capture_pressed)
         lay_t.addWidget(self.capture_btn)
 
@@ -246,11 +249,13 @@ class SnipperWindow(QWidget):
         self.opacity_slider.setValue(int(self._opacity * 100))
         self.opacity_slider.setFixedWidth(64)
         self.opacity_slider.setToolTip("Image opacity")
+        self.opacity_slider.setCursor(Qt.PointingHandCursor)
         self.opacity_slider.valueChanged.connect(self._on_opacity)
         lay_t.addWidget(self.opacity_slider)
 
         self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
         self.hist_label = QLabel("0/0", self.bar_top)
+        self.hist_label.setCursor(Qt.ArrowCursor)
         self.hist_label.setStyleSheet(f"QLabel {{ color: {CHROME_FG}; font-size: 11px; background: transparent; }}")
         self.btn_next = mkbtn(self.bar_top, "next", "Next capture (→)", lambda: self.hist_step(1))
         lay_t.addWidget(self.btn_prev)
@@ -267,6 +272,7 @@ class SnipperWindow(QWidget):
 
         self.size_label = QLabel(self)
         self.size_label.setStyleSheet(LABEL_CSS)
+        self.size_label.setCursor(Qt.ArrowCursor)
         self.size_label.hide()
 
         self.text_edit = QLineEdit(self)
