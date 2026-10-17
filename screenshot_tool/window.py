@@ -3,7 +3,7 @@ import logging
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -308,6 +308,14 @@ class TextEditor(QLineEdit):
         self._press = None
         self._dragging = False
 
+    def event(self, e):
+        # Ctrl+C must stay the capture shortcut even while editing
+        # (QLineEdit otherwise claims clipboard keys via ShortcutOverride)
+        if e.type() == QEvent.Type.ShortcutOverride and e.matches(QKeySequence.StandardKey.Copy):
+            e.ignore()
+            return True
+        return super().event(e)
+
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self._press = e.globalPosition().toPoint()
@@ -393,15 +401,15 @@ class SnipperWindow(QWidget):
         self._build_ui()
 
         QShortcut(QKeySequence(Qt.Key_Escape), self, self._on_escape)
-        QShortcut(QKeySequence("Ctrl+Z"), self, self.undo)
-        QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.hist_step(-1))
-        QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.hist_step(1))
-        QShortcut(QKeySequence("Ctrl+C"), self,
-                  lambda: None if self._text_editing else self.do_capture())
+        self._sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self.undo)
+        self._sc_prev = QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.hist_step(-1))
+        self._sc_next = QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.hist_step(1))
+        self._sc_capture = QShortcut(QKeySequence("Ctrl+C"), self, self._capture_shortcut)
+        self._typing_shortcuts = [self._sc_undo, self._sc_prev, self._sc_next]
         for key, t in (("m", TOOL_MOVE), ("p", TOOL_PEN), ("a", TOOL_ARROW),
                        ("r", TOOL_RECT), ("f", TOOL_FILL), ("t", TOOL_TEXT)):
-            QShortcut(QKeySequence(key), self,
-                      lambda t=t: None if self._text_editing else self.set_tool(t))
+            sc = QShortcut(QKeySequence(key), self, lambda t=t: self.set_tool(t))
+            self._typing_shortcuts.append(sc)
 
         self._ant_timer.start()
 
@@ -786,6 +794,18 @@ class SnipperWindow(QWidget):
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
         self._refresh_text_style()
         self.update()
+
+    def _set_typing_mode(self, on: bool):
+        """While the text editor has the keys, letter/undo/arrow shortcuts
+        must not steal them (they double as tool/history keys)."""
+        for sc in self._typing_shortcuts:
+            sc.setEnabled(not on)
+        self._sc_undo.setEnabled(not on)
+
+    def _capture_shortcut(self):
+        if self._text_editing:
+            self._commit_text()
+        self.do_capture()
 
     def _set_width(self, w: int):
         self._width = int(w)
@@ -1423,6 +1443,7 @@ class SnipperWindow(QWidget):
 
     def _open_text_editor(self, pos: QPoint):
         self._text_editing = True
+        self._set_typing_mode(True)
         self.text_edit.setGeometry(QRect(pos, QSize(260, self._text_size + 8)))
         self.text_edit.show()
         self.text_edit.raise_()
@@ -1451,6 +1472,7 @@ class SnipperWindow(QWidget):
 
     def _close_text_editor(self):
         self._text_editing = False
+        self._set_typing_mode(False)
         self.text_edit.blockSignals(True)
         self.text_edit.clear()
         self.text_edit.hide()

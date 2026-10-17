@@ -37,6 +37,16 @@ def main() -> int:
         print("not running")
         return 0
 
+    from .ipc import owner_alive
+    if owner_alive():
+        # owner alive but didn't answer within 1s (busy in a capture):
+        # never run as a second instance — hand the command over instead
+        if send_command(cmd, timeout=3):
+            print(f"sent (busy owner): {cmd}")
+            return 0
+        print("another instance is running but is not answering", file=sys.stderr)
+        return 1
+
     app = QApplication(sys.argv[:1])
     app.setApplicationName("screenshot-tool")
     app.setQuitOnLastWindowClosed(False)
@@ -46,7 +56,6 @@ def main() -> int:
     win = SnipperWindow(settings)
 
     threading.Thread(target=serve, args=(lambda c: win.ipc_command.emit(c),), daemon=True).start()
-
     if cmd in ("toggle", "show"):
         win.open_at_cursor()
     elif cmd.startswith("showat:"):

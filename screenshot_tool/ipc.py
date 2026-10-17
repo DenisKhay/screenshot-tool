@@ -18,9 +18,29 @@ def send_command(command: str, timeout: float = 1.0) -> bool:
         return False
 
 
+def owner_alive(timeout: float = 0.3) -> bool:
+    """True if some process is listening on the IPC socket right now."""
+    import socket
+    if not SOCKET_PATH.exists():
+        return False
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(timeout)
+        s.connect(str(SOCKET_PATH))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 def serve(handler):
     """Blocking accept loop; call from a daemon thread. handler(str) is called per command."""
     import socket
+    if owner_alive():
+        # never steal a live owner's socket: this process must stay the
+        # single instance (a stolen socket orphans the previous overlay)
+        raise RuntimeError("another screenshot-tool instance owns the IPC socket")
     try:
         SOCKET_PATH.unlink()
     except FileNotFoundError:
