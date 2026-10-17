@@ -79,6 +79,7 @@ import ctypes
 _xlib = None
 _xext = None
 _shape_dpy = None
+_ignore_xerr = None
 
 
 class _XRectangle(ctypes.Structure):
@@ -110,6 +111,8 @@ def set_input_region(widget, region):
 
         open_disp = fn(xlib, "XOpenDisplay", ctypes.c_void_p, [ctypes.c_char_p])
         flush = fn(xlib, "XFlush", None, [ctypes.c_void_p])
+        set_err = fn(xlib, "XSetErrorHandler", ctypes.c_void_p, [ctypes.c_void_p])
+        sync = fn(xlib, "XSync", None, [ctypes.c_void_p, ctypes.c_int])
         get_attrs = fn(xlib, "XGetWindowAttributes", ctypes.c_int,
                        [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p])
         create_region = fn(xext, "XCreateRegion", ctypes.c_void_p, [])
@@ -131,6 +134,13 @@ def set_input_region(widget, region):
         dpy = _shape_dpy
         if not dpy:
             return
+        # shape ops on a possibly mid-recreation window are cosmetic — ignore
+        # X errors on this private connection instead of dying
+        global _ignore_xerr
+        if _ignore_xerr is None:
+            _ignore_xerr = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(
+                lambda *_: 0)
+        set_err(ctypes.cast(_ignore_xerr, ctypes.c_void_p))
         wid = int(widget.winId())
         SHAPE_INPUT, SHAPE_SET = 2, 0
         buf = ctypes.create_string_buffer(256)
@@ -146,6 +156,8 @@ def set_input_region(widget, region):
             combine_region(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
             destroy_region(rg)
         flush(dpy)
+        sync(dpy, False)
+        set_err(None)  # restore default handler
     except Exception:
         log.exception("input shape failed")
 
@@ -786,9 +798,19 @@ class SnipperWindow(QWidget):
         if self._pinned:
             self.raise_()
         self.activateWindow()
+        # the WM places a newly-mapped managed window itself; re-assert the
+        # desktop geometry after mapping so the overlay never visibly jumps
+        QTimer.singleShot(0, self._reassert_geometry)
+        QTimer.singleShot(120, self._reassert_geometry)
         # the platform window was re-created; let it settle before the raw
         # X shape call touches the (new) window id
-        QTimer.singleShot(0, self.relayout)
+        QTimer.singleShot(60, self.relayout)
+
+    def _reassert_geometry(self):
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        want = QRect(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
+        if self.geometry() != want:
+            self.setGeometry(want)
 
     def toggle_fullscreen(self):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
