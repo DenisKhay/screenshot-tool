@@ -82,7 +82,9 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       and delete-current icons redone as a deletion family (stacked
       frames + x / picture + x); vertical separators between button
       groups (top: capture | history | settings; bottom: tools |
-      size/stroke | undo).
+      size/stroke | undo). Regrouped after review: top = capture/copy/
+      pin/opacity | prev/counter/next | trash/delone | settings/close;
+      bottom = tools incl. text-size | color/width | undo.
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
