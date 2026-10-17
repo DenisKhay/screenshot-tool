@@ -145,6 +145,7 @@ class SnipperWindow(QWidget):
         self._draw_start = None
         self._last_rect = None
         self._pre_draw_content = None
+        self._desktop = QRect(QPoint(0, 0), QSize(2560, 1440))
         self._drag_timer = None
 
         self._build_ui()
@@ -309,9 +310,14 @@ class SnipperWindow(QWidget):
         cw, ch = self._content.width(), self._content.height()
         d_w, d_h = self._desktop.width(), self._desktop.height()
 
-        bb = self.bar_bottom.sizeHint(); bb.setWidth(max(bb.width(), 40)); bb.setHeight(TB_H)
-        tb = self.bar_top.sizeHint(); tb.setWidth(max(tb.width(), 40)); tb.setHeight(TB_H)
-        rb = self.bar_right.sizeHint(); rb.setWidth(TB_H); rb.setHeight(max(rb.height(), 40))
+        def fresh_hint(bar):
+            bar.layout().invalidate()
+            bar.layout().activate()
+            return bar.sizeHint()
+
+        bb = fresh_hint(self.bar_bottom); bb.setWidth(max(bb.width(), 40)); bb.setHeight(TB_H)
+        tb = fresh_hint(self.bar_top); tb.setWidth(max(tb.width(), 40)); tb.setHeight(TB_H)
+        rb = fresh_hint(self.bar_right); rb.setWidth(TB_H); rb.setHeight(max(rb.height(), 40))
 
         # bottom bar: outside below, else inside the bottom edge
         bx = max(0, min(self._content.center().x() - bb.width() // 2, d_w - bb.width()))
@@ -731,15 +737,11 @@ class SnipperWindow(QWidget):
         self.btn_11.setVisible(has_img)
         self.btn_bake.setVisible(has_img)
         self.btn_redraw.setVisible(not self._drawing)
-        self.btn_trash.setVisible(bool(self.history))
-        self.btn_delone.setVisible(bool(self.history) and self._image is not None)
+        self.btn_delone.setEnabled(bool(self.history) and self._image is not None)
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
-        hist_on = bool(self.history)
-        self.hist_label.setVisible(hist_on)
-        self.btn_prev.setVisible(hist_on)
-        self.btn_next.setVisible(hist_on)
+        self.btn_trash.setEnabled(bool(self.history))
 
         self.capture_btn.setVisible(not self._pinned)
         if self._drawing:
@@ -751,6 +753,8 @@ class SnipperWindow(QWidget):
             # top bar stays: pin toggle + close remain reachable while pinned
         if has_img:
             self.opacity_slider.setValue(int(self._opacity * 100))
+
+        self.relayout()
 
     # ---------- painting ----------
 
