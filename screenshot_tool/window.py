@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QPen,
     QShortcut,
     QRegion,
+    QFontMetrics,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -1432,9 +1433,14 @@ class SnipperWindow(QWidget):
             return
         text = self.text_edit.text().strip()
         tl = self.text_edit.geometry().topLeft() - self._content.topLeft()
+        # anchor at the editor's own baseline: what you saw is what commits
+        fm = QFontMetrics(TextShape(self._color, self._text_size, QPointF(tl), "").font())
+        line_h = fm.height()
+        baseline_y = (self.text_edit.height() - line_h) // 2 + fm.ascent()
+        baseline = QPointF(tl.x() + 2, tl.y() + baseline_y)
         self._close_text_editor()
         if text:
-            self._shapes.append(TextShape(self._color, self._text_size, QPointF(tl), text))
+            self._shapes.append(TextShape(self._color, self._text_size, baseline, text))
             self.btn_undo.setEnabled(True)
         self.setFocus()
         self.update()

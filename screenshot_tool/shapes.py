@@ -101,8 +101,7 @@ class TextShape(Shape):
     def draw(self, painter):
         painter.setPen(self.color)
         painter.setFont(self.font())
-        painter.drawText(QRectF(self.pos.x(), self.pos.y() - 4, 4000, 400),
-                         Qt.AlignmentFlag.AlignLeft, self.text)
+        painter.drawText(QPointF(self.pos.x(), self.pos.y()), self.text)
 
 
 def render_shapes(shapes, painter: QPainter):
