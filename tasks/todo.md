@@ -77,6 +77,12 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       clipboard keys via ShortcutOverride — editor now yields Copy so
       Ctrl+C commits and captures. (3) letter/undo/arrow shortcuts are
       disabled while editing so typing m/p/a/r/f/t + Ctrl+Z works.
+- [x] Toolbar UX: tooltips always shown (WA_AlwaysShowToolTips — the
+      OR window is never Qt-active, tooltips were flaky); clear-history
+      and delete-current icons redone as a deletion family (stacked
+      frames + x / picture + x); vertical separators between button
+      groups (top: capture | history | settings; bottom: tools |
+      size/stroke | undo).
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
