@@ -374,8 +374,11 @@ class SnipperWindow(QWidget):
         self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._open_width_popup)
         lay_b.addWidget(self.btn_width, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # adjust (right edge): undo, 1:1, bake, redraw, reset, fullscreen
-        self.btn_undo = mkbtn(self.bar_right, "undo", "Undo (Ctrl+Z)", self.undo)
+        # drawing panel (bottom edge): tools + stroke settings + undo
+        self.btn_undo = mkbtn(self.bar_bottom, "undo", "Undo (Ctrl+Z)", self.undo)
+        lay_b.addWidget(self.btn_undo, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # adjust (right edge): 1:1, bake, redraw, reset, fullscreen
         self.btn_11 = QToolButton(self.bar_right)
         self.btn_11.setText("1:1")
         self.btn_11.setFixedSize(BTN, BTN)
@@ -389,7 +392,7 @@ class SnipperWindow(QWidget):
         self.btn_redraw = mkbtn(self.bar_right, "redraw", "Close this rectangle and draw a new one", self.start_redraw)
         self.btn_reset = mkbtn(self.bar_right, "reset", "Clear the frame: hide image and drawings, same size (history kept)", self.reset)
         self.btn_full = mkbtn(self.bar_right, "full", "Fullscreen on the current monitor", self.toggle_fullscreen)
-        for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
+        for b in (self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
             lay_r.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # actions (top edge): camera, copy, pin, opacity, history, trash, delete, settings, close
