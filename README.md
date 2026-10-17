@@ -11,7 +11,8 @@ press the capture button.**
 2. Move it by the body (Move tool / default), resize by corner grips, expand to
    fullscreen with `⛶`.
 3. Annotate: Pen, Arrow, Box, Text; color + stroke-width cycle; `↶` undo.
-4. Press the green **camera** button (end of the toolbar, side configurable):
+4. Capture with the green **camera** button or **Ctrl+C** (end of the toolbar,
+   side configurable):
    - the screen region under the frame is captured, drawings baked in,
    - saved to the configured folder **and** copied to the clipboard,
    - the transparent background becomes the captured image.
