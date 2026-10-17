@@ -1,3 +1,4 @@
+import ctypes
 import logging
 import time
 from pathlib import Path
@@ -5,7 +6,6 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
-    QRegion,
     QCursor,
     QGuiApplication,
     QImage,
@@ -13,6 +13,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QShortcut,
+    QRegion,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,12 +21,12 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QFrame,
     QHBoxLayout,
-    QVBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
     QSlider,
     QToolButton,
+    QVBoxLayout,
     QWidget,
     QWidgetAction,
 )
@@ -38,6 +39,7 @@ log = logging.getLogger("screenshot_tool")
 
 ACCENT = "#9fc9f0"        # blueprint light blue
 INK = "#cfe4f7"           # hint text
+CHROME_FG = INK             # legacy: toolbar text color
 PANEL_BG = "rgba(13, 43, 82, 235)"
 PANEL_BORDER = "#2f6ea5"
 CAPTURE_ACCENT = "#ffd54f"  # blueprint yellow accent
@@ -45,7 +47,8 @@ TB_H = 44   # toolbar row height: 34px camera + 2x(1px border + 4px margin)
 GAP = 6     # gap between frame and toolbar row
 PAD = 6     # window margin around the frame
 BTN = 30    # icon button size
-GRIP = 10   # grip hit radius
+GRIP = 10   # corner grip hit radius
+EDGE_ZONE = 8  # edge grab zone (pre-capture only)
 MIN_W, MIN_H = 240, 160
 
 TOOL_MOVE, TOOL_PEN, TOOL_ARROW, TOOL_RECT, TOOL_FILL, TOOL_TEXT = range(6)
@@ -76,12 +79,13 @@ QLabel {{
 }}
 """
 
-
-import ctypes
+# ---------- X11 input-only shaping (click-through outside the frame) ----------
 
 _xlib = None
 _xext = None
 _shape_dpy = None
+_atom_net_wm_state = None
+_atom_above = None
 _ignore_xerr = None
 
 
@@ -98,13 +102,25 @@ def _ensure_xlibs():
     return _xlib, _xext
 
 
-def set_input_region(widget, region):
-    """Input-only X shape: region receives events, everything else is
-    click-through for the desktop. A None region = full input (no shape).
-    The bounding shape is never touched, so painting/compositing are
-    unaffected (no stale-buffer artifacts)."""
-    try:
-        xlib, xext = _ensure_xlibs()
+_shape_dpy = None
+_atom_net_wm_state = None
+_atom_above = None
+_ignore_xerr = None
+_xlib = None
+_xext = None
+
+
+class _XRectangle(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short),
+                ("w", ctypes.c_ushort), ("h", ctypes.c_ushort)]
+
+
+def _xsetup():
+    """Cached private X connection with properly typed shape/EWMH functions."""
+    global _xlib, _xext, _shape_dpy, _ignore_xerr
+    if _xlib is None:
+        _xlib = ctypes.cdll.LoadLibrary("libX11.so.6")
+        _xext = ctypes.cdll.LoadLibrary("libXext.so.6")
 
         def fn(lib, name, restype, argtypes):
             f = getattr(lib, name)
@@ -112,57 +128,97 @@ def set_input_region(widget, region):
             f.argtypes = argtypes
             return f
 
-        open_disp = fn(xlib, "XOpenDisplay", ctypes.c_void_p, [ctypes.c_char_p])
-        flush = fn(xlib, "XFlush", None, [ctypes.c_void_p])
-        set_err = fn(xlib, "XSetErrorHandler", ctypes.c_void_p, [ctypes.c_void_p])
-        sync = fn(xlib, "XSync", None, [ctypes.c_void_p, ctypes.c_int])
-        get_attrs = fn(xlib, "XGetWindowAttributes", ctypes.c_int,
-                       [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p])
-        create_region = fn(xext, "XCreateRegion", ctypes.c_void_p, [])
-        destroy_region = fn(xext, "XDestroyRegion", None, [ctypes.c_void_p])
-        union_rect = fn(xext, "XUnionRectWithRegion", ctypes.c_int,
-                        [ctypes.POINTER(_XRectangle), ctypes.c_void_p, ctypes.c_void_p])
-        combine_region = fn(xext, "XShapeCombineRegion", None,
-                            [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
-                             ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int])
-        combine_mask = fn(xext, "XShapeCombineMask", None,
-                          [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
-                           ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_int])
-
-        if not widget.isVisible():
-            return  # native window not real yet; re-applied on the next relayout
-        global _shape_dpy
-        if _shape_dpy is None:
-            _shape_dpy = open_disp(None)
-        dpy = _shape_dpy
-        if not dpy:
-            return
-        # shape ops on a possibly mid-recreation window are cosmetic — ignore
-        # X errors on this private connection instead of dying
+        fn(_xlib, "XOpenDisplay", ctypes.c_void_p, [ctypes.c_char_p])
+        fn(_xlib, "XCloseDisplay", None, [ctypes.c_void_p])
+        fn(_xlib, "XFlush", None, [ctypes.c_void_p])
+        fn(_xlib, "XSync", None, [ctypes.c_void_p, ctypes.c_int])
+        fn(_xlib, "XSetErrorHandler", ctypes.c_void_p, [ctypes.c_void_p])
+        fn(_xlib, "XGetWindowAttributes", ctypes.c_int,
+           [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p])
+        fn(_xlib, "XDefaultRootWindow", ctypes.c_ulong, [ctypes.c_void_p])
+        fn(_xlib, "XInternAtom", ctypes.c_ulong,
+           [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int])
+        fn(_xlib, "XSendEvent", ctypes.c_int,
+           [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+            ctypes.c_ulong, ctypes.c_void_p])
+        fn(_xext, "XCreateRegion", ctypes.c_void_p, [])
+        fn(_xext, "XDestroyRegion", None, [ctypes.c_void_p])
+        fn(_xext, "XUnionRectWithRegion", ctypes.c_int,
+           [ctypes.POINTER(_XRectangle), ctypes.c_void_p, ctypes.c_void_p])
+        fn(_xext, "XShapeCombineRegion", None,
+           [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int])
+        fn(_xext, "XShapeCombineMask", None,
+           [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_int])
+        _shape_dpy = _xlib.XOpenDisplay(None)
         global _ignore_xerr
-        if _ignore_xerr is None:
-            _ignore_xerr = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(
-                lambda *_: 0)
-        set_err(ctypes.cast(_ignore_xerr, ctypes.c_void_p))
+        _ignore_xerr = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(
+            lambda *_: 0)
+        _xlib.XSetErrorHandler(ctypes.cast(_ignore_xerr, ctypes.c_void_p))
+        _xlib.XFlush(_shape_dpy)
+    if not _shape_dpy:
+        raise OSError("no X display")
+    return _xlib, _xext, _shape_dpy
+
+
+def set_input_region(widget, region):
+    """Input-only X shape: region receives events, everything else is
+    click-through for the desktop. A None region = full input (no shape).
+    The bounding shape is never touched, so painting/compositing are
+    unaffected."""
+    if not widget.isVisible():
+        return  # native window not real yet; re-applied on the next relayout
+    try:
+        xlib, xext, dpy = _xsetup()
         wid = int(widget.winId())
         SHAPE_INPUT, SHAPE_SET = 2, 0
-        buf = ctypes.create_string_buffer(256)
-        if not get_attrs(dpy, wid, buf):
-            return
-        if region is None:
-            combine_mask(dpy, wid, SHAPE_INPUT, 0, 0, 0, SHAPE_SET)
-        else:
-            rg = create_region()
-            for r in region:
-                rect = _XRectangle(r.x(), r.y(), r.width(), r.height())
-                union_rect(ctypes.byref(rect), rg, rg)
-            combine_region(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
-            destroy_region(rg)
-        flush(dpy)
-        sync(dpy, False)
-        set_err(None)  # restore default handler
+        rg = xext.XCreateRegion()
+        for r in region:
+            rect = _XRectangle(r.x(), r.y(), r.width(), r.height())
+            xext.XUnionRectWithRegion(ctypes.byref(rect), rg, rg)
+        xext.XShapeCombineRegion(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
+        xext.XDestroyRegion(rg)
+        xlib.XFlush(dpy)
     except Exception:
         log.exception("input shape failed")
+
+
+def set_always_on_top(widget, on: bool):
+    """Flip _NET_WM_STATE_ABOVE on the managed window via an EWMH client
+    message — mutter changes the stacking in place: no window recreation,
+    no geometry jump."""
+    global _atom_net_wm_state, _atom_above
+    try:
+        xlib, xext, dpy = _xsetup()
+        win = int(widget.winId())
+        if _atom_net_wm_state is None:
+            _atom_net_wm_state = xlib.XInternAtom(dpy, b"_NET_WM_STATE", False)
+            _atom_above = xlib.XInternAtom(dpy, b"_NET_WM_STATE_ABOVE", False)
+
+        class _CME(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int),
+                        ("data", ctypes.c_ulong * 5)]
+
+        ev = _CME()
+        ev.type = 33  # ClientMessage
+        ev.window = win
+        ev.message_type = _atom_net_wm_state
+        ev.format = 32
+        ev.data[0] = 1 if on else 0  # 1 = add, 0 = remove
+        ev.data[1] = _atom_above
+        ev.data[2] = 0
+
+        root = xlib.XDefaultRootWindow(dpy)
+        mask = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
+        xlib.XSendEvent(dpy, root, False, mask, ctypes.byref(ev))
+        xlib.XFlush(dpy)
+        log.info("pin: _NET_WM_STATE_ABOVE %s", "set" if on else "removed")
+    except Exception:
+        log.exception("above-state toggle failed")
 
 
 class _WidthPreview(QWidget):
@@ -202,16 +258,22 @@ class SnipperWindow(QWidget):
     def __init__(self, settings: Settings):
         super().__init__(None)
         self.settings = settings
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.X11BypassWindowManagerHint)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
 
+        self._desktop = QRect(QPoint(0, 0), QSize(2560, 1440))
+        self._drawing = False
+        self._draw_start = None
+        self._last_rect = None
+        self._pre_draw_content = None
         self._content = QRect(0, 0, settings["default_width"], settings["default_height"])
         self._strip_mode = "below"
         self._fullscreen = False
         self._pre_fs = None
         self._pinned = True
         self._busy = False
+        self._overlay_want = None
 
         self._image = None
         self._image_px = None
@@ -232,12 +294,11 @@ class SnipperWindow(QWidget):
         self._resize_ref = None
         self._text_editing = False
         self._border_alpha = 255
-        self._drawing = False
-        self._draw_start = None
-        self._last_rect = None
-        self._pre_draw_content = None
-        self._desktop = QRect(QPoint(0, 0), QSize(2560, 1440))
         self._drag_timer = None
+        self._ant_phase = 0.0
+        self._ant_timer = QTimer(self)
+        self._ant_timer.setInterval(90)
+        self._ant_timer.timeout.connect(self._ant_step)
 
         self._build_ui()
 
@@ -252,20 +313,9 @@ class SnipperWindow(QWidget):
             QShortcut(QKeySequence(key), self,
                       lambda t=t: None if self._text_editing else self.set_tool(t))
 
-        self._ant_phase = 0.0
-        self._ant_timer = QTimer(self)
-        self._ant_timer.setInterval(90)
-        self._ant_timer.timeout.connect(self._ant_step)
         self._ant_timer.start()
 
         self.ipc_command.connect(self._on_ipc)
-
-    def _ant_step(self):
-        # animate only while selecting; a captured shot freezes the border
-        if not self.isVisible() or self._image is not None:
-            return
-        self._ant_phase = (self._ant_phase + 2.2) % 16.0
-        self.update()
 
     # ---------- UI construction ----------
 
@@ -294,9 +344,7 @@ class SnipperWindow(QWidget):
             b.clicked.connect(cb)
             return b
 
-        self._mkbtn = lambda *a, **k: mkbtn(self.bar_bottom, *a, **k)
-
-        # tools (bottom edge): move, pen, arrow, rect, text, color, width
+        # tools (bottom edge): move, pen, arrow, rect, fill, text, color, width
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
         self.btn_move = mkbtn(self.bar_bottom, "move", "Move / transform the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
@@ -312,19 +360,19 @@ class SnipperWindow(QWidget):
 
         self.btn_color = mkbtn(self.bar_bottom, "pen", "Stroke color", self._open_color_picker)
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
-        lay_b.addWidget(self.btn_color)
+        lay_b.addWidget(self.btn_color, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._open_width_popup)
-        lay_b.addWidget(self.btn_width)
+        lay_b.addWidget(self.btn_width, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # adjust (right edge): undo, 1:1, bake, reset, fullscreen
+        # adjust (right edge): undo, 1:1, bake, redraw, reset, fullscreen
         self.btn_undo = mkbtn(self.bar_right, "undo", "Undo (Ctrl+Z)", self.undo)
         self.btn_11 = QToolButton(self.bar_right)
         self.btn_11.setText("1:1")
         self.btn_11.setFixedSize(BTN, BTN)
         self.btn_11.setToolTip("Reset scale: frame shows the image pixel-per-pixel")
         self.btn_11.setStyleSheet(
-            f"QToolButton {{ background: rgba(38,50,56,215); border: none; border-radius: 6px;"
-            f" color: {INK}; font-size: 10px; font-weight: bold; }}"
+            f"QToolButton {{ background: rgba(38,50,56,215); border: none;"
+            f" color: {CHROME_FG}; font-size: 10px; font-weight: bold; }}"
             f"QToolButton:hover {{ background: rgba(55,71,79,240); }}")
         self.btn_11.clicked.connect(self.reset_scale)
         self.btn_bake = mkbtn(self.bar_right, "bake", "Bake: commit the resized scale into the image", self.bake_scale)
@@ -334,7 +382,7 @@ class SnipperWindow(QWidget):
         for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
             lay_r.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # actions (top edge): camera, copy, pin, opacity, history, close
+        # actions (top edge): camera, copy, pin, opacity, history, trash, delete, settings, close
         self.capture_btn = QToolButton(self.bar_top)
         self.capture_btn.setIcon(icons.svg_icon("camera", CAPTURE_ACCENT))
         self.capture_btn.setIconSize(QSize(20, 20))
@@ -346,10 +394,10 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.capture_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_copy = mkbtn(self.bar_top, "copy", "Copy image to clipboard", self.copy_image)
-        lay_t.addWidget(self.btn_copy)
+        lay_t.addWidget(self.btn_copy, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_pin = mkbtn(self.bar_top, "pin", "Always on top", self.toggle_pin, True)
         self.btn_pin.setChecked(True)
-        lay_t.addWidget(self.btn_pin)
+        lay_t.addWidget(self.btn_pin, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.opacity_slider = QSlider(Qt.Horizontal, self.bar_top)
         self.opacity_slider.setRange(20, 100)
@@ -363,19 +411,19 @@ class SnipperWindow(QWidget):
         self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
         self.hist_label = QLabel("0/0", self.bar_top)
         self.hist_label.setCursor(Qt.ArrowCursor)
-        self.hist_label.setStyleSheet(f"QLabel {{ color: {INK}; font-size: 11px; background: transparent; }}")
+        self.hist_label.setStyleSheet(f"QLabel {{ color: {CHROME_FG}; font-size: 11px; background: transparent; }}")
         self.btn_next = mkbtn(self.bar_top, "next", "Next capture (→)", lambda: self.hist_step(1))
-        lay_t.addWidget(self.btn_prev)
+        lay_t.addWidget(self.btn_prev, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.hist_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        lay_t.addWidget(self.btn_next)
+        lay_t.addWidget(self.btn_next, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_trash = mkbtn(self.bar_top, "trash", "Clear history (manual)", self.clear_history)
-        lay_t.addWidget(self.btn_trash)
+        lay_t.addWidget(self.btn_trash, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_delone = mkbtn(self.bar_top, "delone", "Delete the current screenshot (history + files)", self.delete_current)
-        lay_t.addWidget(self.btn_delone)
+        lay_t.addWidget(self.btn_delone, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_settings = mkbtn(self.bar_top, "gear", "Settings", self._open_settings)
-        lay_t.addWidget(self.btn_settings)
+        lay_t.addWidget(self.btn_settings, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_close = mkbtn(self.bar_top, "close", "Hide (Esc)", self._dismiss)
-        lay_t.addWidget(self.btn_close)
+        lay_t.addWidget(self.btn_close, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.size_label = QLabel(self)
         self.size_label.setStyleSheet(LABEL_CSS)
@@ -399,14 +447,14 @@ class SnipperWindow(QWidget):
                      self._content.size())
 
     def relayout(self):
-        """Place the edge bars around the frame inside the fixed overlay
+        """Position the edge bars around the frame inside the fixed overlay
         window. Bottom = tools, top = actions, right = adjust; each flips
         inside the frame when there is no room outside."""
         if self._drawing:
             self.bar_bottom.hide()
             self.bar_top.hide()
             self.bar_right.hide()
-            set_input_region(self, None)  # drawing starts anywhere: full input
+            self._update_mask()
             self.update()
             return
 
@@ -450,6 +498,23 @@ class SnipperWindow(QWidget):
         self._update_mask()
         self.update()
 
+    def _ant_step(self):
+        # animate only while selecting; a captured shot freezes the border
+        if not self.isVisible() or self._image is not None:
+            return
+        self._ant_phase = (self._ant_phase + 2.2) % 16.0
+        self.update()
+
+    def _update_mask(self):
+        """Input-only shape: frame + bars take events, the rest of the overlay
+        is click-through for the desktop. Never touches painting."""
+        region = QRegion(self._content.adjusted(-8, -8, 8, 8))
+        for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+            region = region.united(QRegion(bar.geometry()))
+        if self.size_label.isVisible():
+            region = region.united(QRegion(self.size_label.geometry()))
+        set_input_region(self, region)
+
     def _place_size_label(self):
         lbl = self.size_label.sizeHint() if self.size_label.text() else QSize(60, 18)
         lx = self._content.right() - lbl.width() - 8
@@ -460,7 +525,7 @@ class SnipperWindow(QWidget):
             lbl.width(), lbl.height())
 
     def open_at_cursor(self):
-        self.open_last()
+        self.open_draw()
 
     def _enter_draw_mode(self):
         if self._content is not None and not self._content.isNull() and self._content.width() > 0:
@@ -469,8 +534,6 @@ class SnipperWindow(QWidget):
         self._draw_start = None
         self._pre_draw_content = None
         self._content = QRect()
-        self._image = None
-        self._is_latest = False
         self.setCursor(Qt.CrossCursor)
         self.size_label.hide()
         self.relayout()
@@ -486,37 +549,19 @@ class SnipperWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+        set_always_on_top(self, self._pinned)
 
-    def open_last(self):
-        """Hotkey default: rectangle at its previous position, ready to use;
-        dragging on empty space draws a fresh one."""
+    def start_redraw(self):
+        """Close the current rectangle and draw a new one."""
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
         self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
-        if self._last_rect is not None and not self._last_rect.isNull():
-            r = self._last_rect
-            r = r.intersected(QRect(QPoint(0, 0), self._desktop.size()))
-            if r.width() >= MIN_W // 2:
-                r.setWidth(max(MIN_W, r.width()))
-                r.setHeight(max(MIN_H, r.height()))
-            self._drawing = False
-            self._content = r
-            self.unsetCursor()
-            self.relayout()
-            self._refresh_size_label()
-            self._update_ui_state()
-        else:
-            self._enter_draw_mode()
+        self._enter_draw_mode()
         self.show()
         self.raise_()
         self.activateWindow()
-        if not self._drawing:
-            self._pulse_border()
-
-    def start_redraw(self):
-        """Close the current rectangle and draw a new one."""
-        self._enter_draw_mode()
+        set_always_on_top(self, self._pinned)
 
     def open_at(self, cx: int, cy: int):
         """Open with a ready frame at the given point (scripting/tests)."""
@@ -537,16 +582,9 @@ class SnipperWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+        set_always_on_top(self, self._pinned)
+        self._apply_pin()
         self._pulse_border()
-
-    def _end_session(self):
-        self._shapes = []
-        self._pending = None
-        self._image = None
-        self._is_latest = False
-        if self._text_editing:
-            self._close_text_editor()
-        self._update_ui_state()
 
     def _pulse_border(self):
         seq = [90, 255, 90, 255, 90, 255]
@@ -587,8 +625,8 @@ class SnipperWindow(QWidget):
     def _open_color_picker(self):
         menu = QMenu(self)
         menu.setStyleSheet(
-            f"QMenu {{ background: rgba(38,50,56,242); border: 1px solid rgba(255,255,255,40);"
-            f" border-radius: 8px; padding: 6px; }}"
+            f"QMenu {{ background: rgba(13,43,82,242); border: 1px solid rgba(159,201,240,60);"
+            f" border-radius: 0; padding: 6px; }}"
         )
         row = QWidget(menu)
         h = QHBoxLayout(row)
@@ -599,8 +637,7 @@ class SnipperWindow(QWidget):
             b.setFixedSize(22, 22)
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet(
-                f"QToolButton {{ background: {name}; border-radius: 5px;"
-                f" border: 1px solid rgba(255,255,255,70); }}"
+                f"QToolButton {{ background: {name}; border: 1px solid rgba(255,255,255,70); }}"
             )
             b.clicked.connect(lambda _=False, n=name: (menu.close(), self._set_color(QColor(n))))
             h.addWidget(b)
@@ -609,8 +646,7 @@ class SnipperWindow(QWidget):
         custom.setCursor(Qt.PointingHandCursor)
         custom.setText("+")
         custom.setStyleSheet(
-            f"QToolButton {{ color: {CHROME_FG}; background: rgba(255,255,255,30);"
-            f" border-radius: 5px; font-weight: bold; }}"
+            f"QToolButton {{ color: {CHROME_FG}; background: rgba(255,255,255,30); }}"
         )
         custom.setToolTip("Custom color…")
         custom.clicked.connect(lambda: (menu.close(), self._pick_custom_color()))
@@ -630,7 +666,7 @@ class SnipperWindow(QWidget):
     def _open_width_popup(self):
         panel = QWidget(None, Qt.Popup | Qt.FramelessWindowHint)
         panel.setAttribute(Qt.WA_TranslucentBackground)
-        panel.setStyleSheet("QWidget { background: rgba(38, 50, 56, 242); border-radius: 8px; }")
+        panel.setStyleSheet("QWidget { background: rgba(13, 43, 82, 242); }")
         v = QHBoxLayout(panel)
         v.setContentsMargins(14, 8, 14, 10)
         v.setSpacing(8)
@@ -658,7 +694,7 @@ class SnipperWindow(QWidget):
             return
         if self._shapes:
             self._shapes.pop()
-            self.btn_undo.setEnabled(bool(self._shapes) or self._imprints())
+            self.btn_undo.setEnabled(bool(self._shapes) or bool(self._imprints()))
             self.update()
             return
         entry = self._current_entry()
@@ -801,49 +837,33 @@ class SnipperWindow(QWidget):
         self.update()
 
     def toggle_pin(self):
-        """Switches always-on-top for real. Pinned: override-redirect overlay —
-        above everything, always. Unpinned: a managed window in normal
-        stacking — other windows can cover it."""
         self._pinned = not self._pinned
         self.btn_pin.setChecked(self._pinned)
-        flags = Qt.FramelessWindowHint | Qt.Tool
-        if self._pinned:
-            flags |= Qt.X11BypassWindowManagerHint
-        self.setWindowFlags(flags)
+        self._apply_pin()
+
+    def _apply_pin(self):
+        """Pinned (sticker mode): the window hugs just the shot — compact and
+        always-on-top. Unpinned: full interactive session (window spans the
+        desktop). Either way the shot itself never moves: its global position
+        is preserved, and the window origin stays frozen during resizes."""
         vg = QGuiApplication.primaryScreen().virtualGeometry()
-        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
-        self.show()
-        if self._pinned:
-            self.raise_()
-        self.activateWindow()
-        # the WM places a newly-mapped managed window itself; hold the overlay
-        # geometry until it sticks (also lets the re-created platform window
-        # settle before the raw X shape call touches the new window id)
-        self._settle_overlay()
-        QTimer.singleShot(60, self.relayout)
-
-    def _settle_overlay(self):
-        """After a pin/unpin (window re-creation) the WM may re-place the
-        managed window asynchronously; hold the overlay geometry until it
-        sticks."""
-        vg = QGuiApplication.primaryScreen().virtualGeometry()
-        want = QRect(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
-        state = {"ticks": 0, "good": 0}
-        timer = QTimer(self)
-
-        def tick():
-            state["ticks"] += 1
-            if self.geometry() != want:
-                self.setGeometry(want)
-                state["good"] = 0
-            else:
-                state["good"] += 1
-            if state["good"] >= 6 or state["ticks"] >= 30:
-                timer.stop()
-
-        timer.timeout.connect(tick)
-        timer.start(50)
-        self._settle_timer = timer
+        cg = self.content_global_rect()
+        above = self._strip_mode == "above"
+        if self._pinned and not self._fullscreen:
+            m_t = PAD
+            m_b = PAD
+        else:
+            m_t = (GAP + TB_H + PAD if above else PAD)
+            m_b = (PAD if above else GAP + TB_H + PAD)
+        m_l = m_r = PAD
+        win_x, win_y = cg.left() - m_l, cg.top() - m_t
+        win_w = cg.width() + m_l + m_r
+        win_h = cg.height() + m_t + m_b
+        self._content.moveTopLeft(QPoint(m_l, m_t))
+        self.setGeometry(win_x, win_y, win_w, win_h)
+        self._overlay_want = QRect(win_x, win_y, win_w, win_h)
+        self.relayout()
+        set_always_on_top(self, True)
 
     def toggle_fullscreen(self):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -866,36 +886,25 @@ class SnipperWindow(QWidget):
         view_hist = has_img and not self._is_latest
         tools_on = has_img and not view_hist
 
-        # NOTE: bars use enable/disable instead of hide/show — hidden widgets
-        # are skipped by QLayout and would resurface misaligned at (0,0).
         for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect,
                   self.btn_fill, self.btn_text):
             b.setEnabled(tools_on or not has_img)
         self.btn_color.setEnabled(tools_on or not has_img)
         self.btn_width.setEnabled(tools_on or not has_img)
         self.btn_undo.setEnabled(bool(self._shapes) or bool(self._imprints()))
+
         self.btn_copy.setEnabled(has_img)
         self.opacity_slider.setEnabled(has_img)
         self.btn_11.setEnabled(has_img)
         self.btn_bake.setEnabled(has_img)
-        self.btn_redraw.setEnabled(True)
         self.btn_delone.setEnabled(bool(self.history) and has_img)
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
         self.btn_trash.setEnabled(bool(self.history))
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
 
-        self.capture_btn.setVisible(not self._drawing)
-        if self._drawing:
-            for bar in (self.bar_bottom, self.bar_top, self.bar_right):
-                bar.hide()
-        else:
-            self.bar_bottom.setVisible(True)
-            self.bar_right.setVisible(True)
         if has_img:
             self.opacity_slider.setValue(int(self._opacity * 100))
-
-        self.relayout()
 
     # ---------- painting ----------
 
@@ -905,23 +914,23 @@ class SnipperWindow(QWidget):
         c = self._content
 
         if self._drawing:
-            if not self._content.isNull():
-                # dim everything outside the rect being pulled
-                outside = QRegion(self.rect()).subtracted(QRegion(self._content))
+            if not c.isNull():
+                outside = QRegion(self.rect()).subtracted(QRegion(c))
                 p.setClipRegion(outside)
                 p.fillRect(self.rect(), QColor(6, 24, 43, 110))
                 p.setClipping(False)
                 pen = QPen(QColor(ACCENT), 2)
                 p.setPen(pen)
-                p.drawRect(self._content.adjusted(1, 1, -1, -1))
+                p.drawRect(c.adjusted(1, 1, -1, -1))
             else:
-                hint = QColor("#cfe4f7")
+                hint = QColor(INK)
                 hint.setAlpha(200)
                 p.setPen(hint)
                 f = p.font()
                 f.setPixelSize(15)
                 p.setFont(f)
-                p.drawText(self.rect(), Qt.AlignCenter, "Draw the area: press and drag")
+                p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                           "Draw the area: press and drag")
             return
 
         if self._image is not None:
@@ -929,13 +938,13 @@ class SnipperWindow(QWidget):
             p.drawImage(c, self._image)
             p.setOpacity(1.0)
         else:
-            dim = QColor("#cfe4f7")
+            dim = QColor(INK)
             dim.setAlpha(160)
             p.setPen(dim)
             f = p.font()
             f.setPixelSize(13)
             p.setFont(f)
-            p.drawText(c, Qt.AlignCenter,
+            p.drawText(c, Qt.AlignmentFlag.AlignCenter,
                        "Adjust the frame, annotate, then press the yellow camera button (or Ctrl+C) to capture")
 
         p.save()
@@ -957,8 +966,6 @@ class SnipperWindow(QWidget):
         pen.setDashPattern([5.0, 5.0])
         p.setPen(pen)
         p.drawRect(c.adjusted(1, 1, -1, -1))
-
-
 
     # ---------- interaction ----------
 
@@ -998,8 +1005,6 @@ class SnipperWindow(QWidget):
         self._update_ui_state()
         self._pulse_border()
 
-    EDGE_ZONE = 8
-
     def _grip_at(self, pos: QPoint):
         c = self._content
         for name, pt in (("tl", c.topLeft()), ("tr", c.topRight()),
@@ -1007,7 +1012,7 @@ class SnipperWindow(QWidget):
             if (QPointF(pos) - QPointF(pt)).manhattanLength() <= GRIP:
                 return name
         if self._image is None:  # edge resizing only before a capture
-            e = self.EDGE_ZONE
+            e = EDGE_ZONE
             if abs(pos.y() - c.top()) <= e and c.left() < pos.x() < c.right():
                 return "t"
             if abs(pos.y() - c.bottom()) <= e and c.left() < pos.x() < c.right():
@@ -1029,8 +1034,6 @@ class SnipperWindow(QWidget):
             return
         corner = self._grip_at(pos)
         if corner:
-            # grips win over everything — including the draw-new-rect gesture
-            # (a grip press is often a few px outside the content edge)
             self._resize_corner = corner
             self._resize_ref = QRect(self._content)
             return
@@ -1041,8 +1044,6 @@ class SnipperWindow(QWidget):
             self._pre_draw_content = keep
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
-            return
-        if not self._content.contains(pos):
             return
 
         view_hist = self._image is not None and not self._is_latest
@@ -1061,16 +1062,16 @@ class SnipperWindow(QWidget):
             self._pending = RectShape(self._color, self._width, cp, cp)
         elif self._tool == TOOL_FILL:
             self._pending = FilledRectShape(self._color, self._width, cp, cp)
-        elif self._tool == TOOL_FILL:
-            self._pending = FilledRectShape(self._color, self._width, cp, cp)
         elif self._tool == TOOL_TEXT:
             self._open_text_editor(pos)
         self.update()
 
     def mouseMoveEvent(self, e):
         pos = e.position().toPoint()
-        gpos = e.globalPosition().toPoint()
 
+        if self._resize_corner and self._resize_ref:
+            self._do_resize(pos)
+            return
         if self._drawing:
             if self._draw_start is not None:
                 self._content = QRect(self._draw_start, pos).normalized()
@@ -1078,15 +1079,16 @@ class SnipperWindow(QWidget):
                 self.size_label.show()
                 self.update()
             return
-        if self._resize_corner and self._resize_ref:
-            self._do_resize(pos)
-            return
         if self._drag_offset is not None:
             tl = pos - self._drag_offset
             tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
             tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+            old_tl = self._content.topLeft()
+            d = tl - old_tl
             self._content.moveTopLeft(tl)
-            self.relayout()
+            # the overlay hugs the shot: move it by the same delta so nothing clips
+            self.move(self.pos() + d)
+            self._update_mask()
             return
         if self._pending is not None:
             cp = QPointF(pos) - QPointF(self._content.topLeft())
@@ -1098,21 +1100,22 @@ class SnipperWindow(QWidget):
             return
         corner = self._grip_at(pos)
         if corner in ("tl", "br"):
-            self.setCursor(Qt.SizeFDiagCursor)
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
         elif corner in ("tr", "bl"):
-            self.setCursor(Qt.SizeBDiagCursor)
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
         elif corner in ("l", "r"):
-            self.setCursor(Qt.SizeHorCursor)
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
         elif corner in ("t", "b"):
-            self.setCursor(Qt.SizeVerCursor)
-        elif self._content.contains(pos) and self._tool != TOOL_MOVE:
-            self.setCursor(Qt.CrossCursor)
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        elif c_contains(self._content, pos) and self._tool != TOOL_MOVE:
+            self.setCursor(Qt.CursorShape.CrossCursor)
         else:
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, e):
+        pos = e.position().toPoint()
         if self._drawing:
-            self._finish_draw(e.position().toPoint())
+            self._finish_draw(pos)
             return
         if self._resize_corner:
             self._resize_corner = None
@@ -1142,20 +1145,10 @@ class SnipperWindow(QWidget):
                 self.btn_undo.setEnabled(True)
             self.update()
 
-    def _update_mask(self):
-        """Input-only shape: frame + bars take events, the rest of the overlay
-        is click-through for the desktop. Never touches painting."""
-        region = QRegion(self._content.adjusted(-8, -8, 8, 8))
-        for bar in (self.bar_bottom, self.bar_top, self.bar_right):
-            region = region.united(QRegion(bar.geometry()))
-        if self.size_label.isVisible():
-            region = region.united(QRegion(self.size_label.geometry()))
-        set_input_region(self, region)
-
     def _do_resize(self, lpos: QPoint):
-        """Corner drags: aspect-locked (with an image), anchored at the opposite
-        corner. Edge drags (no image yet) move only their own axis. Pure
-        content-rect math inside the fixed overlay window."""
+        """Aspect-locked resize (with an image) anchored at the opposite corner.
+        Edge drags (no image yet) move only their own axis. Pure content-rect
+        math inside the fixed overlay window."""
         cg0 = self._resize_ref
         corner = self._resize_corner
         horiz = "l" in corner or "r" in corner
@@ -1302,11 +1295,11 @@ class SnipperWindow(QWidget):
         self._image_px = (crop.width(), crop.height())
         self._is_latest = True
         self._shapes = []
-        self.set_tool(TOOL_MOVE)
 
         self.show()
         self.raise_()
         self.activateWindow()
+        set_always_on_top(self, self._pinned)
         self._refresh_size_label()
         self._update_ui_state()
         log.info("capture: shown visible=%s geo=%dx%d+%d+%d",
@@ -1320,7 +1313,6 @@ class SnipperWindow(QWidget):
         rect follows the cursor inside the fixed overlay window."""
         if not (QGuiApplication.mouseButtons() & Qt.LeftButton):
             return
-        vg = QGuiApplication.primaryScreen().virtualGeometry()
         last = QCursor.pos()
 
         def tick():
@@ -1332,11 +1324,13 @@ class SnipperWindow(QWidget):
             d = pos - last
             if d.isNull():
                 return
-            tl = self._content.topLeft() + QPoint(d.x(), d.y())
+            tl = self._content.topLeft() + d
             tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
             tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
             self._content.moveTopLeft(tl)
-            self.relayout()
+            # the overlay hugs the shot: follow the same delta
+            self.move(self.pos() + d)
+            self._update_mask()
             last = pos
 
         drag_timer = QTimer(self)
@@ -1389,7 +1383,6 @@ class SnipperWindow(QWidget):
         self._is_latest = idx == len(self.history) - 1
         self._shapes = []
         self._pending = None
-        self.set_tool(TOOL_MOVE)
         if not self._fullscreen:
             self._content.setSize(entry["logical"])
             self.relayout()
@@ -1402,6 +1395,17 @@ class SnipperWindow(QWidget):
 
     # ---------- misc ----------
 
+    def _end_session(self):
+        """Clear the interactive state but keep the session history."""
+        self._shapes = []
+        self._pending = None
+        self._image = None
+        self._image_px = None
+        self._is_latest = False
+        if self._text_editing:
+            self._close_text_editor()
+        self._update_ui_state()
+
     def _dismiss(self):
         """Esc / ✕: hide. History is kept until cleared with the trash button."""
         if not self._content.isNull() and self._content.width() > 0:
@@ -1411,6 +1415,8 @@ class SnipperWindow(QWidget):
     def _on_escape(self):
         if self._text_editing:
             self._cancel_text()
+        elif self._drawing:
+            self._dismiss()
         else:
             self._dismiss()
 
@@ -1429,3 +1435,7 @@ class SnipperWindow(QWidget):
             self.do_capture()
         elif cmd == "quit":
             QApplication.quit()
+
+
+def c_contains(r: QRect, p: QPoint) -> bool:
+    return r.contains(p)
