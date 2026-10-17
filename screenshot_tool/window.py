@@ -74,6 +74,52 @@ QLabel {{
 """
 
 
+import ctypes
+
+_xlib = None
+_xext = None
+
+
+class _XRectangle(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short),
+                ("w", ctypes.c_ushort), ("h", ctypes.c_ushort)]
+
+
+def _ensure_xlibs():
+    global _xlib, _xext
+    if _xlib is None:
+        _xlib = ctypes.cdll.LoadLibrary("libX11.so.6")
+        _xext = ctypes.cdll.LoadLibrary("libXext.so.6")
+    return _xlib, _xext
+
+
+def set_input_region(widget, region):
+    """Input-only X shape: region receives events, everything else is
+    click-through for the desktop. A None region = full input (no shape).
+    The bounding shape is never touched, so painting/compositing are
+    unaffected (no stale-buffer artifacts)."""
+    try:
+        xlib, xext = _ensure_xlibs()
+        dpy = xlib.XOpenDisplay(None)
+        if not dpy:
+            return
+        wid = int(widget.winId())
+        SHAPE_INPUT, SHAPE_SET = 2, 0
+        if region is None:
+            xext.XShapeCombineMask(dpy, wid, SHAPE_INPUT, 0, 0, None, SHAPE_SET)
+        else:
+            rg = xext.XCreateRegion()
+            for r in region:
+                rect = _XRectangle(r.x(), r.y(), r.width(), r.height())
+                xext.XUnionRectWithRegion(ctypes.byref(rect), rg, rg)
+            xext.XShapeCombineRegion(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
+            xext.XDestroyRegion(rg)
+        xlib.XFlush(dpy)
+        xlib.XCloseDisplay(dpy)
+    except Exception:
+        log.exception("input shape failed")
+
+
 class _WidthPreview(QWidget):
     """Live stroke-thickness display for the width popup."""
 
@@ -300,11 +346,8 @@ class SnipperWindow(QWidget):
             self.bar_bottom.hide()
             self.bar_top.hide()
             self.bar_right.hide()
-            self.clearMask()
-            # the areas newly exposed by the mask expansion contain stale
-            # backing-store pixels (the old frame); repaint synchronously so
-            # they are overwritten before the compositor presents them
-            self.repaint()
+            set_input_region(self, None)  # drawing starts anywhere: full input
+            self.update()
             return
 
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
@@ -366,6 +409,8 @@ class SnipperWindow(QWidget):
         self._draw_start = None
         self._pre_draw_content = None
         self._content = QRect()
+        self._image = None
+        self._is_latest = False
         self.setCursor(Qt.CrossCursor)
         self.size_label.hide()
         self.relayout()
@@ -996,14 +1041,14 @@ class SnipperWindow(QWidget):
             self.update()
 
     def _update_mask(self):
-        """Restrict window painting + input to frame, toolbar and label; clicks
-        elsewhere (the rest of the overlay) pass through to the desktop."""
+        """Input-only shape: frame + bars take events, the rest of the overlay
+        is click-through for the desktop. Never touches painting."""
         region = QRegion(self._content.adjusted(-8, -8, 8, 8))
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
             region = region.united(QRegion(bar.geometry()))
         if self.size_label.isVisible():
             region = region.united(QRegion(self.size_label.geometry()))
-        self.setMask(region)
+        set_input_region(self, region)
 
     def _do_resize(self, lpos: QPoint):
         """Corner drags: aspect-locked (with an image), anchored at the opposite
