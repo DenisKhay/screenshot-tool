@@ -261,7 +261,8 @@ class SnipperWindow(QWidget):
         self.ipc_command.connect(self._on_ipc)
 
     def _ant_step(self):
-        if not self.isVisible():
+        # animate only while selecting; a captured shot freezes the border
+        if not self.isVisible() or self._image is not None:
             return
         self._ant_phase = (self._ant_phase + 2.2) % 16.0
         self.update()
@@ -865,25 +866,26 @@ class SnipperWindow(QWidget):
         view_hist = has_img and not self._is_latest
         tools_on = has_img and not view_hist
 
-        for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text):
+        # NOTE: bars use enable/disable instead of hide/show — hidden widgets
+        # are skipped by QLayout and would resurface misaligned at (0,0).
+        for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect,
+                  self.btn_fill, self.btn_text):
             b.setEnabled(tools_on or not has_img)
         self.btn_color.setEnabled(tools_on or not has_img)
         self.btn_width.setEnabled(tools_on or not has_img)
-        self.btn_undo.setEnabled(bool(self._shapes))
-
-        self.btn_copy.setVisible(has_img)
-        self.opacity_slider.setVisible(has_img)
-        self.btn_pin.setVisible(has_img)
-        self.btn_11.setVisible(has_img)
-        self.btn_bake.setVisible(has_img)
-        self.btn_redraw.setVisible(not self._drawing)
-        self.btn_delone.setEnabled(bool(self.history) and self._image is not None)
+        self.btn_undo.setEnabled(bool(self._shapes) or bool(self._imprints()))
+        self.btn_copy.setEnabled(has_img)
+        self.opacity_slider.setEnabled(has_img)
+        self.btn_11.setEnabled(has_img)
+        self.btn_bake.setEnabled(has_img)
+        self.btn_redraw.setEnabled(True)
+        self.btn_delone.setEnabled(bool(self.history) and has_img)
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
-        self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
         self.btn_trash.setEnabled(bool(self.history))
+        self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
 
-        self.capture_btn.setVisible(True)
+        self.capture_btn.setVisible(not self._drawing)
         if self._drawing:
             for bar in (self.bar_bottom, self.bar_top, self.bar_right):
                 bar.hide()
