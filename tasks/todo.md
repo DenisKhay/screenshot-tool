@@ -54,6 +54,10 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       live preview, jump-to-click). Qt.Popup panels never map under the
       bypass/OR overlay — child widgets only (text_edit pattern).
       Text editor anchors at the click point (was content.tl+pos).
+- [x] Text size: independent from stroke width — dedicated dropdown
+      (A-arrows button next to T, enabled only for the text tool,
+      8..96px jump slider + live "Aa" preview); TextShape takes a real
+      pixel size. settings key: text_size (default 18).
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
