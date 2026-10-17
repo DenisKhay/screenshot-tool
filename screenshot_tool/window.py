@@ -468,9 +468,9 @@ class SnipperWindow(QWidget):
             lay_b.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
         self.tool_group.addButton(self.btn_move, TOOL_MOVE)
         self.btn_move.setChecked(True)
-        lay_b.addWidget(mksep(self.bar_bottom))
         self.btn_textsize = mkbtn(self.bar_bottom, "textsize", "Text size", self._toggle_textsize_panel)
         lay_b.addWidget(self.btn_textsize, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay_b.addWidget(mksep(self.bar_bottom))
 
         self.btn_color = mkbtn(self.bar_bottom, "pen", "Stroke color", self._open_color_picker)
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
@@ -535,6 +535,7 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_prev, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.hist_label, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.btn_next, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay_t.addWidget(mksep(self.bar_top))
         self.btn_trash = mkbtn(self.bar_top, "trash",
                                "Clear history — delete ALL shots of this session", self.clear_history)
         lay_t.addWidget(self.btn_trash, 0, Qt.AlignmentFlag.AlignVCenter)
