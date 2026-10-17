@@ -270,7 +270,7 @@ class SnipperWindow(QWidget):
         self.btn_11.clicked.connect(self.reset_scale)
         self.btn_bake = mkbtn(self.bar_right, "bake", "Bake: commit the resized scale into the image", self.bake_scale)
         self.btn_redraw = mkbtn(self.bar_right, "redraw", "Close this rectangle and draw a new one", self.start_redraw)
-        self.btn_reset = mkbtn(self.bar_right, "reset", "Reset: clear drawings, default size", self.reset)
+        self.btn_reset = mkbtn(self.bar_right, "reset", "Clear the frame: hide image and drawings, same size (history kept)", self.reset)
         self.btn_full = mkbtn(self.bar_right, "full", "Fullscreen on the current monitor", self.toggle_fullscreen)
         for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
             lay_r.addWidget(b)
@@ -723,7 +723,8 @@ class SnipperWindow(QWidget):
         self.relayout()
 
     def reset(self):
-        """Clear drawings and return the frame to its pristine state."""
+        """Clear the view: hide the current image and drawings. The frame keeps
+        its size and position; history is untouched."""
         if self._text_editing:
             self._cancel_text()
         self._shapes = []
@@ -731,16 +732,11 @@ class SnipperWindow(QWidget):
         self._image = None
         self._image_px = None
         self._is_latest = False
-        self._opacity = max(0.2, min(1.0, self.settings["default_opacity"] / 100))
-        self.opacity_slider.setValue(int(self._opacity * 100))
         self.set_tool(TOOL_MOVE)
         self.btn_undo.setEnabled(False)
-        if not self._fullscreen:
-            self._content.setSize(QSize(self.settings["default_width"], self.settings["default_height"]))
-            self.relayout()
+        self.relayout()
         self._refresh_size_label()
         self._update_ui_state()
-        self.update()
 
     def _on_opacity(self, v):
         self._opacity = v / 100
