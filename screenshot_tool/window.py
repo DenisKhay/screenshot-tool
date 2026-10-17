@@ -41,7 +41,7 @@ INK = "#cfe4f7"           # hint text
 PANEL_BG = "rgba(13, 43, 82, 235)"
 PANEL_BORDER = "#2f6ea5"
 CAPTURE_ACCENT = "#ffd54f"  # blueprint yellow accent
-TB_H = 38   # toolbar row height
+TB_H = 44   # toolbar row height: 34px camera + 2x(1px border + 4px margin)
 GAP = 6     # gap between frame and toolbar row
 PAD = 6     # window margin around the frame
 BTN = 30    # icon button size
@@ -307,7 +307,7 @@ class SnipperWindow(QWidget):
         self.btn_text = mkbtn(self.bar_bottom, "text", "Text (T)", lambda: self.set_tool(TOOL_TEXT), True)
         for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text)):
             self.tool_group.addButton(b, i)
-            lay_b.addWidget(b)
+            lay_b.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_move.setChecked(True)
 
         self.btn_color = mkbtn(self.bar_bottom, "pen", "Stroke color", self._open_color_picker)
@@ -332,7 +332,7 @@ class SnipperWindow(QWidget):
         self.btn_reset = mkbtn(self.bar_right, "reset", "Clear the frame: hide image and drawings, same size (history kept)", self.reset)
         self.btn_full = mkbtn(self.bar_right, "full", "Fullscreen on the current monitor", self.toggle_fullscreen)
         for b in (self.btn_undo, self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
-            lay_r.addWidget(b)
+            lay_r.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # actions (top edge): camera, copy, pin, opacity, history, close
         self.capture_btn = QToolButton(self.bar_top)
@@ -343,7 +343,7 @@ class SnipperWindow(QWidget):
         self.capture_btn.setToolTip("Capture: save to folder + clipboard (hold to drag the shot)")
         self.capture_btn.setCursor(Qt.PointingHandCursor)
         self.capture_btn.pressed.connect(self._on_capture_pressed)
-        lay_t.addWidget(self.capture_btn)
+        lay_t.addWidget(self.capture_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_copy = mkbtn(self.bar_top, "copy", "Copy image to clipboard", self.copy_image)
         lay_t.addWidget(self.btn_copy)
@@ -358,7 +358,7 @@ class SnipperWindow(QWidget):
         self.opacity_slider.setToolTip("Image opacity")
         self.opacity_slider.setCursor(Qt.PointingHandCursor)
         self.opacity_slider.valueChanged.connect(self._on_opacity)
-        lay_t.addWidget(self.opacity_slider)
+        lay_t.addWidget(self.opacity_slider, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
         self.hist_label = QLabel("0/0", self.bar_top)
@@ -366,7 +366,7 @@ class SnipperWindow(QWidget):
         self.hist_label.setStyleSheet(f"QLabel {{ color: {INK}; font-size: 11px; background: transparent; }}")
         self.btn_next = mkbtn(self.bar_top, "next", "Next capture (→)", lambda: self.hist_step(1))
         lay_t.addWidget(self.btn_prev)
-        lay_t.addWidget(self.hist_label)
+        lay_t.addWidget(self.hist_label, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.btn_next)
         self.btn_trash = mkbtn(self.bar_top, "trash", "Clear history (manual)", self.clear_history)
         lay_t.addWidget(self.btn_trash)
