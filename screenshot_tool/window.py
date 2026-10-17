@@ -535,10 +535,10 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_prev, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.hist_label, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.btn_next, 0, Qt.AlignmentFlag.AlignVCenter)
-        lay_t.addWidget(mksep(self.bar_top))
         self.btn_trash = mkbtn(self.bar_top, "trash",
                                "Clear history — delete ALL shots of this session", self.clear_history)
         lay_t.addWidget(self.btn_trash, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay_t.addWidget(mksep(self.bar_top))
         self.btn_delone = mkbtn(self.bar_top, "delone",
                                 "Delete the current shot (file + history entry)", self.delete_current)
         lay_t.addWidget(self.btn_delone, 0, Qt.AlignmentFlag.AlignVCenter)
