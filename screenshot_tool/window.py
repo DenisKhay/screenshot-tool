@@ -356,6 +356,9 @@ class SnipperWindow(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool |
                             Qt.X11BypassWindowManagerHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # the override-redirect window is never "active" in Qt's eyes and
+        # tooltips are suppressed for inactive windows without this
+        self.setAttribute(Qt.WA_AlwaysShowToolTips, True)
         self.setMouseTracking(True)
 
         self._desktop = QRect(QPoint(0, 0), QSize(2560, 1440))
@@ -442,7 +445,14 @@ class SnipperWindow(QWidget):
             b.clicked.connect(cb)
             return b
 
-        # drawing panel (bottom edge): tools + stroke settings + undo
+        def mksep(parent):
+            s = QFrame(parent)
+            s.setStyleSheet("QFrame { background: rgba(159,201,240,80); border: none; }")
+            s.setFixedSize(1, 20)
+            s.setCursor(Qt.ArrowCursor)
+            return s
+
+        # tools (bottom edge): drawing tools | text size + stroke settings | undo
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
         self.btn_pen = mkbtn(self.bar_bottom, "pen", "Pen (P)", lambda: self.set_tool(TOOL_PEN), True)
@@ -458,6 +468,7 @@ class SnipperWindow(QWidget):
             lay_b.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
         self.tool_group.addButton(self.btn_move, TOOL_MOVE)
         self.btn_move.setChecked(True)
+        lay_b.addWidget(mksep(self.bar_bottom))
         self.btn_textsize = mkbtn(self.bar_bottom, "textsize", "Text size", self._toggle_textsize_panel)
         lay_b.addWidget(self.btn_textsize, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -466,6 +477,7 @@ class SnipperWindow(QWidget):
         lay_b.addWidget(self.btn_color, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._toggle_width_panel)
         lay_b.addWidget(self.btn_width, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay_b.addWidget(mksep(self.bar_bottom))
 
         # drawing panel (bottom edge): tools + stroke settings + undo
         self.btn_undo = mkbtn(self.bar_bottom, "undo", "Undo (Ctrl+Z)", self.undo)
@@ -513,6 +525,7 @@ class SnipperWindow(QWidget):
         self.opacity_slider.setCursor(Qt.PointingHandCursor)
         self.opacity_slider.valueChanged.connect(self._on_opacity)
         lay_t.addWidget(self.opacity_slider, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay_t.addWidget(mksep(self.bar_top))
 
         self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
         self.hist_label = QLabel("0/0", self.bar_top)
@@ -522,10 +535,13 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_prev, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.hist_label, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(self.btn_next, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.btn_trash = mkbtn(self.bar_top, "trash", "Clear history (manual)", self.clear_history)
+        self.btn_trash = mkbtn(self.bar_top, "trash",
+                               "Clear history — delete ALL shots of this session", self.clear_history)
         lay_t.addWidget(self.btn_trash, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.btn_delone = mkbtn(self.bar_top, "delone", "Delete the current screenshot (history + files)", self.delete_current)
+        self.btn_delone = mkbtn(self.bar_top, "delone",
+                                "Delete the current shot (file + history entry)", self.delete_current)
         lay_t.addWidget(self.btn_delone, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay_t.addWidget(mksep(self.bar_top))
         self.btn_settings = mkbtn(self.bar_top, "gear", "Settings", self._open_settings)
         lay_t.addWidget(self.btn_settings, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_close = mkbtn(self.bar_top, "close", "Hide (Esc)", self._dismiss)
