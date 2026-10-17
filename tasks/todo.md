@@ -75,6 +75,19 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       mode. Pin is now purely the always-on-top marker (inherent to the
       bypass overlay); _apply_pin re-asserts full-desktop geometry only.
       Repro/verify via debug IPC (now includes window geometry).
+- [x] Pin done RIGHT (two window modes): mutter always keeps the ACTIVE
+      window above OR windows, so no amount of X stacking gives real
+      pin semantics for a bypass overlay (verified empirically —
+      XRaise/lower/timer all lose to the active window). Architecture:
+      draw/selection = OR full-desktop overlay; captured shot = MANAGED
+      sticker window hugging the shot; pin toggles _NET_WM_STATE_ABOVE
+      on it (mutter-enforced above-layer). Mode switches at capture/
+      redraw/fullscreen preserve the frame's global position, re-assert
+      geometry (settle 60/200/500ms) and the input mask (winId changes
+      on flag switch). toggle_fullscreen from sticker re-showed the
+      hidden overlay. EWMH debugging lesson: read the _NET_WM_STATE
+      property and check atoms — do not probe a property literally
+      named _NET_WM_STATE_ABOVE.
 - [x] Ctrl+C reliability: (1) single-instance guarantee — ipc.serve used
       to force-unlink the socket, so a cold start during a busy capture
       stole it and orphaned the previous overlay (stacked overlays,
