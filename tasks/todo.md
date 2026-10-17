@@ -83,7 +83,8 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       frames + x / picture + x); vertical separators between button
       groups (top: capture | history | settings; bottom: tools |
       size/stroke | undo). Regrouped after review: top = capture/copy/
-      pin/opacity | prev/counter/next | trash/delone | settings/close;
+      pin/opacity | prev/counter/next/clear-history | delete-current |
+      settings/close;
       bottom = tools incl. text-size | color/width | undo.
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
