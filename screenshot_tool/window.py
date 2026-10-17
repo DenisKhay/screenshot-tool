@@ -800,17 +800,7 @@ class SnipperWindow(QWidget):
         p.setPen(QPen(border, 2))
         p.drawRect(c.adjusted(1, 1, -1, -1))
 
-        if not self._pinned:
-            p.setRenderHint(QPainter.Antialiasing, True)
-            inset = 6 if self._fullscreen else 0
-            for pt in (c.topLeft(), c.topRight(), c.bottomLeft(), c.bottomRight()):
-                d = QPointF(
-                    inset if pt.x() <= c.center().x() else -inset,
-                    inset if pt.y() <= c.center().y() else -inset,
-                )
-                p.setPen(QPen(border, 1.5))
-                p.setBrush(border)
-                p.drawEllipse(QPointF(pt) + d, 4.5, 4.5)
+
 
     # ---------- interaction ----------
 
@@ -850,6 +840,8 @@ class SnipperWindow(QWidget):
         self._update_ui_state()
         self._pulse_border()
 
+    EDGE_ZONE = 8
+
     def _grip_at(self, pos: QPoint):
         if self._pinned:
             return None
@@ -858,6 +850,16 @@ class SnipperWindow(QWidget):
                          ("bl", c.bottomLeft()), ("br", c.bottomRight())):
             if (QPointF(pos) - QPointF(pt)).manhattanLength() <= GRIP:
                 return name
+        if self._image is None:  # edge resizing only before a capture
+            e = self.EDGE_ZONE
+            if abs(pos.y() - c.top()) <= e and c.left() < pos.x() < c.right():
+                return "t"
+            if abs(pos.y() - c.bottom()) <= e and c.left() < pos.x() < c.right():
+                return "b"
+            if abs(pos.x() - c.left()) <= e and c.top() < pos.y() < c.bottom():
+                return "l"
+            if abs(pos.x() - c.right()) <= e and c.top() < pos.y() < c.bottom():
+                return "r"
         return None
 
     def mousePressEvent(self, e):
@@ -939,6 +941,10 @@ class SnipperWindow(QWidget):
             self.setCursor(Qt.SizeFDiagCursor)
         elif corner in ("tr", "bl"):
             self.setCursor(Qt.SizeBDiagCursor)
+        elif corner in ("l", "r"):
+            self.setCursor(Qt.SizeHorCursor)
+        elif corner in ("t", "b"):
+            self.setCursor(Qt.SizeVerCursor)
         elif self._content.contains(pos) and not (self._pinned or self._tool == TOOL_MOVE):
             self.setCursor(Qt.CrossCursor)
         else:
@@ -987,62 +993,49 @@ class SnipperWindow(QWidget):
         self.setMask(region)
 
     def _do_resize(self, lpos: QPoint):
-        """Aspect-locked resize anchored at the opposite corner — pure
-        content-rect math inside the fixed overlay window. No window geometry
-        ever changes, so there is nothing the compositor can present stale."""
+        """Corner drags: aspect-locked (with an image), anchored at the opposite
+        corner. Edge drags (no image yet) move only their own axis. Pure
+        content-rect math inside the fixed overlay window."""
         cg0 = self._resize_ref
         corner = self._resize_corner
-        grow_left = "l" in corner
-        grow_top = "t" in corner
-        ax = cg0.right() if grow_left else cg0.left()
-        ay = cg0.bottom() if grow_top else cg0.top()
+        horiz = "l" in corner or "r" in corner
+        vert = "t" in corner or "b" in corner
         lo_x, hi_x = PAD, self._desktop.width() - PAD
         lo_y, hi_y = PAD, self._desktop.height() - PAD
+        aspect = (self._image.width() / max(1, self._image.height())) if self._image is not None else None
+        ax = cg0.right() if "l" in corner else cg0.left()
+        ay = cg0.bottom() if "t" in corner else cg0.top()
 
-        iw = max(MIN_W, abs(lpos.x() - ax))
-        ih = max(MIN_H, abs(lpos.y() - ay))
-
-        if self._image is not None:
-            aspect = self._image.width() / max(1, self._image.height())
-            if ih * aspect >= iw:
-                ch, cw = ih, round(ih * aspect)
-            else:
-                cw, ch = iw, round(iw / aspect)
-            cw = max(MIN_W, cw)
-            ch = max(MIN_H, ch)
-            if grow_left:
+        if not horiz:
+            cgx, cw = cg0.left(), cg0.width()
+        else:
+            cw = max(MIN_W, abs(lpos.x() - ax))
+            if "l" in corner:
                 cgx = max(lo_x, ax - cw)
                 cw = max(MIN_W, ax - cgx)
-                ch = max(MIN_H, round(cw / aspect))
             else:
                 cw = max(MIN_W, min(cw, hi_x - ax))
                 cgx = ax
+
+        if not vert:
+            cgy, ch = cg0.top(), cg0.height()
+        else:
+            if aspect is not None and horiz:
                 ch = max(MIN_H, round(cw / aspect))
-            if grow_top:
+            else:
+                ch = max(MIN_H, abs(lpos.y() - ay))
+            if "t" in corner:
                 cgy = max(lo_y, ay - ch)
                 ch = max(MIN_H, ay - cgy)
-                cw = max(MIN_W, round(ch * aspect))
-                if grow_left:
-                    cgx = ax - cw
             else:
                 ch = max(MIN_H, min(ch, hi_y - ay))
                 cgy = ay
-                cw = max(MIN_W, round(ch * aspect))
-                if grow_left:
-                    cgx = ax - cw
-        else:
-            if grow_left:
-                cgx = max(lo_x, ax - iw)
-                cw = max(MIN_W, ax - cgx)
-            else:
-                cw = max(MIN_W, min(iw, hi_x - ax))
-                cgx = ax
-            if grow_top:
-                cgy = max(lo_y, ay - ih)
-                ch = max(MIN_H, ay - cgy)
-            else:
-                ch = max(MIN_H, min(ih, hi_y - ay))
-                cgy = ay
+
+        if aspect is not None and horiz and vert:
+            # vertical clamps may have adjusted ch: re-couple the width
+            cw = max(MIN_W, round(ch * aspect))
+            if "l" in corner:
+                cgx = ax - cw
 
         self._content = QRect(QPoint(cgx, cgy), QSize(cw, ch))
         self.relayout()
