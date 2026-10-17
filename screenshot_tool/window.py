@@ -869,6 +869,13 @@ class SnipperWindow(QWidget):
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
             return
+        corner = self._grip_at(pos)
+        if corner:
+            # grips win over everything — including the draw-new-rect gesture
+            # (a grip press is often a few px outside the content edge)
+            self._resize_corner = corner
+            self._resize_ref = QRect(self._content)
+            return
         if not self._content.isNull() and not self._content.contains(pos):
             # other tools: dragging on empty space still draws a fresh rectangle
             keep = QRect(self._content)
@@ -876,11 +883,6 @@ class SnipperWindow(QWidget):
             self._pre_draw_content = keep
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
-            return
-        corner = self._grip_at(pos)
-        if corner:
-            self._resize_corner = corner
-            self._resize_ref = QRect(self._content)
             return
         if not self._content.contains(pos):
             return
