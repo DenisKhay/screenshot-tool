@@ -10,6 +10,16 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
 - Toggle/hide/quit via IPC ✓
 - Hotkey Super+Alt+A registered (needs Denis's hands to confirm feel)
 
+## Key findings (window path on miku, 2026-10-17)
+- Mutter clamps managed XWayland toplevels into the primary monitor's
+  workarea: requested 4480x1440+0+0 → mapped 4440x1048+40+392 (392 =
+  eDP-1 y-offset 360 + panel 32). Top ~392px of DP-1 unreachable.
+  FIX: Qt.X11BypassWindowManagerHint (override-redirect) — geometry
+  honored 1:1, keyboard still delivered.
+- Input-only X shape went STALE across hide/show: _update_mask ran while
+  hidden (skipped), then draw mode would have applied an empty region.
+  FIX: draw mode = full input (None region), re-applied after show().
+
 ## Key findings (capture path on miku)
 - `org.gnome.Shell.Screenshot` D-Bus: AccessDenied for unsandboxed apps (GNOME 46).
 - Portal `Screenshot()` needs a permission-store grant; WITHOUT it the portal

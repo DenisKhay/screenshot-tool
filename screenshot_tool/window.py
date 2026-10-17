@@ -164,7 +164,7 @@ def _xsetup():
 
 def set_input_region(widget, region):
     """Input-only X shape: region receives events, everything else is
-    click-through for the desktop. A None region = full input (no shape).
+    click-through for the desktop. A None region = full input (shape removed).
     The bounding shape is never touched, so painting/compositing are
     unaffected."""
     if not widget.isVisible():
@@ -173,12 +173,15 @@ def set_input_region(widget, region):
         xlib, xext, dpy = _xsetup()
         wid = int(widget.winId())
         SHAPE_INPUT, SHAPE_SET = 2, 0
-        rg = xext.XCreateRegion()
-        for r in region:
-            rect = _XRectangle(r.x(), r.y(), r.width(), r.height())
-            xext.XUnionRectWithRegion(ctypes.byref(rect), rg, rg)
-        xext.XShapeCombineRegion(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
-        xext.XDestroyRegion(rg)
+        if region is None:
+            xext.XShapeCombineMask(dpy, wid, SHAPE_INPUT, 0, 0, 0, SHAPE_SET)
+        else:
+            rg = xext.XCreateRegion()
+            for r in region:
+                rect = _XRectangle(r.x(), r.y(), r.width(), r.height())
+                xext.XUnionRectWithRegion(ctypes.byref(rect), rg, rg)
+            xext.XShapeCombineRegion(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
+            xext.XDestroyRegion(rg)
         xlib.XFlush(dpy)
     except Exception:
         log.exception("input shape failed")
@@ -258,7 +261,13 @@ class SnipperWindow(QWidget):
     def __init__(self, settings: Settings):
         super().__init__(None)
         self.settings = settings
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool)
+        # Bypass the WM: mutter clamps managed toplevels into the primary
+        # monitor's workarea (uneven dual-monitor layout), which used to cut
+        # the overlay down to 4440x1048+40+392 and left the top of the screen
+        # unreachable. Override-redirect honors setGeometry 1:1; stacking and
+        # input shaping are done manually via X calls below.
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool |
+                            Qt.X11BypassWindowManagerHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
 
@@ -507,7 +516,11 @@ class SnipperWindow(QWidget):
 
     def _update_mask(self):
         """Input-only shape: frame + bars take events, the rest of the overlay
-        is click-through for the desktop. Never touches painting."""
+        is click-through for the desktop. In draw mode the whole overlay takes
+        events (the rectangle can start anywhere). Never touches painting."""
+        if self._drawing:
+            set_input_region(self, None)
+            return
         region = QRegion(self._content.adjusted(-8, -8, 8, 8))
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
             region = region.united(QRegion(bar.geometry()))
@@ -549,6 +562,7 @@ class SnipperWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+        self._update_mask()
         set_always_on_top(self, self._pinned)
 
     def start_redraw(self):
@@ -561,6 +575,7 @@ class SnipperWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+        self._update_mask()
         set_always_on_top(self, self._pinned)
 
     def open_at(self, cx: int, cy: int):
