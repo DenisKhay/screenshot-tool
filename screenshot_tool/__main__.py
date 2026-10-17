@@ -1,5 +1,7 @@
 import argparse
+import faulthandler
 import logging
+faulthandler.enable()
 import os
 import sys
 import threading

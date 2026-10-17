@@ -78,6 +78,7 @@ import ctypes
 
 _xlib = None
 _xext = None
+_shape_dpy = None
 
 
 class _XRectangle(ctypes.Structure):
@@ -108,7 +109,6 @@ def set_input_region(widget, region):
             return f
 
         open_disp = fn(xlib, "XOpenDisplay", ctypes.c_void_p, [ctypes.c_char_p])
-        close_disp = fn(xlib, "XCloseDisplay", None, [ctypes.c_void_p])
         flush = fn(xlib, "XFlush", None, [ctypes.c_void_p])
         get_attrs = fn(xlib, "XGetWindowAttributes", ctypes.c_int,
                        [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p])
@@ -123,14 +123,18 @@ def set_input_region(widget, region):
                           [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
                            ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_int])
 
-        dpy = open_disp(None)
+        if not widget.isVisible():
+            return  # native window not real yet; re-applied on the next relayout
+        global _shape_dpy
+        if _shape_dpy is None:
+            _shape_dpy = open_disp(None)
+        dpy = _shape_dpy
         if not dpy:
             return
         wid = int(widget.winId())
         SHAPE_INPUT, SHAPE_SET = 2, 0
-        buf = ctypes.create_string_buffer(128)  # XWindowAttributes-ish; existence check only
+        buf = ctypes.create_string_buffer(256)
         if not get_attrs(dpy, wid, buf):
-            close_disp(dpy)
             return
         if region is None:
             combine_mask(dpy, wid, SHAPE_INPUT, 0, 0, 0, SHAPE_SET)
@@ -142,7 +146,6 @@ def set_input_region(widget, region):
             combine_region(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
             destroy_region(rg)
         flush(dpy)
-        close_disp(dpy)
     except Exception:
         log.exception("input shape failed")
 
