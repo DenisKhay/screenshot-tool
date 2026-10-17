@@ -100,22 +100,49 @@ def set_input_region(widget, region):
     unaffected (no stale-buffer artifacts)."""
     try:
         xlib, xext = _ensure_xlibs()
-        dpy = xlib.XOpenDisplay(None)
+
+        def fn(lib, name, restype, argtypes):
+            f = getattr(lib, name)
+            f.restype = restype
+            f.argtypes = argtypes
+            return f
+
+        open_disp = fn(xlib, "XOpenDisplay", ctypes.c_void_p, [ctypes.c_char_p])
+        close_disp = fn(xlib, "XCloseDisplay", None, [ctypes.c_void_p])
+        flush = fn(xlib, "XFlush", None, [ctypes.c_void_p])
+        get_attrs = fn(xlib, "XGetWindowAttributes", ctypes.c_int,
+                       [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p])
+        create_region = fn(xext, "XCreateRegion", ctypes.c_void_p, [])
+        destroy_region = fn(xext, "XDestroyRegion", None, [ctypes.c_void_p])
+        union_rect = fn(xext, "XUnionRectWithRegion", ctypes.c_int,
+                        [ctypes.POINTER(_XRectangle), ctypes.c_void_p, ctypes.c_void_p])
+        combine_region = fn(xext, "XShapeCombineRegion", None,
+                            [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                             ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int])
+        combine_mask = fn(xext, "XShapeCombineMask", None,
+                          [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                           ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_int])
+
+        dpy = open_disp(None)
         if not dpy:
             return
         wid = int(widget.winId())
         SHAPE_INPUT, SHAPE_SET = 2, 0
+        buf = ctypes.create_string_buffer(128)  # XWindowAttributes-ish; existence check only
+        if not get_attrs(dpy, wid, buf):
+            close_disp(dpy)
+            return
         if region is None:
-            xext.XShapeCombineMask(dpy, wid, SHAPE_INPUT, 0, 0, None, SHAPE_SET)
+            combine_mask(dpy, wid, SHAPE_INPUT, 0, 0, 0, SHAPE_SET)
         else:
-            rg = xext.XCreateRegion()
+            rg = create_region()
             for r in region:
                 rect = _XRectangle(r.x(), r.y(), r.width(), r.height())
-                xext.XUnionRectWithRegion(ctypes.byref(rect), rg, rg)
-            xext.XShapeCombineRegion(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
-            xext.XDestroyRegion(rg)
-        xlib.XFlush(dpy)
-        xlib.XCloseDisplay(dpy)
+                union_rect(ctypes.byref(rect), rg, rg)
+            combine_region(dpy, wid, SHAPE_INPUT, 0, 0, rg, SHAPE_SET)
+            destroy_region(rg)
+        flush(dpy)
+        close_disp(dpy)
     except Exception:
         log.exception("input shape failed")
 
@@ -165,7 +192,7 @@ class SnipperWindow(QWidget):
         self._strip_mode = "below"
         self._fullscreen = False
         self._pre_fs = None
-        self._pinned = False
+        self._pinned = True
         self._busy = False
 
         self._image = None
@@ -466,8 +493,6 @@ class SnipperWindow(QWidget):
         self._drawing = False
         self._draw_start = None
         self._fullscreen = False
-        self._pinned = False
-        self.btn_pin.setChecked(False)
         w = min(self.settings["default_width"], self._desktop.width() - TB_H - 4 * PAD)
         h = min(self.settings["default_height"], self._desktop.height() - TB_H - 4 * PAD)
         x = max(PAD, min(cx - w // 2 - vg.x(), self._desktop.width() - w - PAD))
@@ -743,14 +768,24 @@ class SnipperWindow(QWidget):
         self.update()
 
     def toggle_pin(self):
-        """Only switches always-on-top. The overlay is inherently above all
-        managed windows; pinning re-asserts it and unpinning releases the
-        claim. No other behavior is attached."""
+        """Switches always-on-top for real. Pinned: override-redirect overlay —
+        above everything, always. Unpinned: a managed window in normal
+        stacking — other windows can cover it."""
         self._pinned = not self._pinned
         self.btn_pin.setChecked(self._pinned)
+        flags = Qt.FramelessWindowHint | Qt.Tool
+        if self._pinned:
+            flags |= Qt.X11BypassWindowManagerHint
+        self.setWindowFlags(flags)
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
+        self.show()
         if self._pinned:
             self.raise_()
-            self.activateWindow()
+        self.activateWindow()
+        # the platform window was re-created; let it settle before the raw
+        # X shape call touches the (new) window id
+        QTimer.singleShot(0, self.relayout)
 
     def toggle_fullscreen(self):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
