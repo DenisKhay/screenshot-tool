@@ -68,6 +68,15 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       baseline (font metrics: ascent + vertical centering) and draws
       at the baseline point — no vertical jump on commit at any size
       (cross-correlated editor grab vs committed capture: ~1px).
+- [x] Ctrl+C reliability: (1) single-instance guarantee — ipc.serve used
+      to force-unlink the socket, so a cold start during a busy capture
+      stole it and orphaned the previous overlay (stacked overlays,
+      key focus split: "Ctrl+C not always works"); serve now refuses a
+      live owner's socket and main() hands the command to it instead.
+      (2) Ctrl+C while the text editor is focused: QLineEdit claimed
+      clipboard keys via ShortcutOverride — editor now yields Copy so
+      Ctrl+C commits and captures. (3) letter/undo/arrow shortcuts are
+      disabled while editing so typing m/p/a/r/f/t + Ctrl+Z works.
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
