@@ -301,7 +301,10 @@ class SnipperWindow(QWidget):
             self.bar_top.hide()
             self.bar_right.hide()
             self.clearMask()
-            self.update()
+            # the areas newly exposed by the mask expansion contain stale
+            # backing-store pixels (the old frame); repaint synchronously so
+            # they are overwritten before the compositor presents them
+            self.repaint()
             return
 
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
