@@ -86,8 +86,6 @@ QLabel {{
 _xlib = None
 _xext = None
 _shape_dpy = None
-_atom_net_wm_state = None
-_atom_above = None
 _ignore_xerr = None
 
 
@@ -153,6 +151,8 @@ def _xsetup():
         fn(_xext, "XShapeCombineMask", None,
            [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
             ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_int])
+        fn(_xlib, "XLowerWindow", None, [ctypes.c_void_p, ctypes.c_ulong])
+        fn(_xlib, "XRaiseWindow", None, [ctypes.c_void_p, ctypes.c_ulong])
         _shape_dpy = _xlib.XOpenDisplay(None)
         global _ignore_xerr
         _ignore_xerr = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(
@@ -189,13 +189,13 @@ def set_input_region(widget, region):
         log.exception("input shape failed")
 
 
-def set_always_on_top(widget, on: bool):
-    """Flip _NET_WM_STATE_ABOVE on the managed window via an EWMH client
-    message — mutter changes the stacking in place: no window recreation,
-    no geometry jump."""
+def set_above_state(widget, on: bool):
+    """Toggle _NET_WM_STATE_ABOVE via an EWMH client message. Only meaningful
+    for MANAGED windows — mutter enforces the above layer for them (kept
+    above newly focused windows), which is exactly the pin semantics."""
     global _atom_net_wm_state, _atom_above
     try:
-        xlib, xext, dpy = _xsetup()
+        xlib, _, dpy = _xsetup()
         win = int(widget.winId())
         if _atom_net_wm_state is None:
             _atom_net_wm_state = xlib.XInternAtom(dpy, b"_NET_WM_STATE", False)
@@ -213,7 +213,7 @@ def set_always_on_top(widget, on: bool):
         ev.window = win
         ev.message_type = _atom_net_wm_state
         ev.format = 32
-        ev.data[0] = 1 if on else 0  # 1 = add, 0 = remove
+        ev.data[0] = 2 if on else 0  # 2 = _NET_WM_STATE_TOGGLE
         ev.data[1] = _atom_above
         ev.data[2] = 0
 
@@ -221,7 +221,6 @@ def set_always_on_top(widget, on: bool):
         mask = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
         xlib.XSendEvent(dpy, root, False, mask, ctypes.byref(ev))
         xlib.XFlush(dpy)
-        log.info("pin: _NET_WM_STATE_ABOVE %s", "set" if on else "removed")
     except Exception:
         log.exception("above-state toggle failed")
 
@@ -371,6 +370,8 @@ class SnipperWindow(QWidget):
         self._pre_fs = None
         self._pinned = True
         self._busy = False
+        self._bypass = True  # OR full-desktop overlay vs managed sticker
+        self._sticker_want_rect = None
 
         self._image = None
         self._image_px = None
@@ -608,6 +609,12 @@ class SnipperWindow(QWidget):
         inside the frame when there is no room outside."""
         self._width_panel.hide()
         self._textsize_panel.hide()
+        if not self._bypass and self.isVisible():
+            # sticker mode: the managed window hugs the shot and follows
+            # every content resize (grips, 1:1, bake, history)
+            want = self._sticker_want()
+            if self.geometry() != want:
+                self._set_geometry_keep(want)
         if self._drawing:
             self.bar_bottom.hide()
             self.bar_top.hide()
@@ -725,6 +732,7 @@ class SnipperWindow(QWidget):
 
     def open_draw(self):
         """Activate in draw mode: crosshair, pull the rectangle from nothing."""
+        self._enter_overlay_mode()
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
@@ -734,10 +742,10 @@ class SnipperWindow(QWidget):
         self.raise_()
         self.activateWindow()
         self._update_mask()
-        set_always_on_top(self, self._pinned)
 
     def start_redraw(self):
         """Close the current rectangle and draw a new one."""
+        self._enter_overlay_mode()
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
@@ -747,10 +755,10 @@ class SnipperWindow(QWidget):
         self.raise_()
         self.activateWindow()
         self._update_mask()
-        set_always_on_top(self, self._pinned)
 
     def open_at(self, cx: int, cy: int):
         """Open with a ready frame at the given point (scripting/tests)."""
+        self._enter_overlay_mode()
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
@@ -768,8 +776,6 @@ class SnipperWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        set_always_on_top(self, self._pinned)
-        self._apply_pin()
         self._pulse_border()
 
     def _pulse_border(self):
@@ -1078,18 +1084,66 @@ class SnipperWindow(QWidget):
         self._apply_pin()
 
     def _apply_pin(self):
-        """Pin is the always-on-top marker only: the bypass overlay is
-        inherently on top and must always span the desktop. The old hug
-        (setGeometry around the shot — a managed-window-era relic) jumped
-        the frame, clipped the right bar and flipped drags into
-        window-move mode."""
-        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        """Pin = _NET_WM_STATE_ABOVE on the managed sticker: mutter enforces
+        the above layer (kept above newly focused windows). Unpinned: normal
+        stacking — other windows cover the shot. Pure state flip: no
+        geometry, no recreation, no jump."""
+        if not self._bypass:
+            set_above_state(self, self._pinned)
+
+    def _sticker_want(self, cg=None):
+        """Geometry of the managed sticker window: the shot plus room for the
+        top/bottom/right strips (the left edge needs only PAD)."""
+        if cg is None:
+            cg = self.content_global_rect()
+        m_l, m_t = PAD, TB_H + GAP + PAD
+        m_r, m_b = TB_H + GAP + PAD, TB_H + GAP + PAD
+        return QRect(cg.left() - m_l, cg.top() - m_t,
+                     cg.width() + m_l + m_r, cg.height() + m_t + m_b)
+
+    def _enter_sticker_mode(self):
+        """Post-capture: switch the widget from the OR full-desktop overlay to
+        a MANAGED window hugging the shot, so _NET_WM_STATE_ABOVE (pin) is
+        honored by mutter. The frame keeps its global position."""
         cg = self.content_global_rect()
+        if not self._bypass:
+            self._set_geometry_keep(self._sticker_want(cg))
+            return
+        self._bypass = False
+        self.setWindowFlag(Qt.X11BypassWindowManagerHint, False)
+        self._content.moveTopLeft(QPoint(PAD, TB_H + GAP + PAD))
+        self._set_geometry_keep(self._sticker_want(cg))
+        self.show()
+        self._update_mask()
+        set_above_state(self, self._pinned)
+
+    def _enter_overlay_mode(self):
+        """Back to the OR full-desktop overlay (drawing/selection)."""
+        if self._bypass:
+            return
+        cg = self.content_global_rect()
+        self._bypass = True
+        self.setWindowFlag(Qt.X11BypassWindowManagerHint, True)
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
         self._content.moveTopLeft(QPoint(cg.left() - vg.x(), cg.top() - vg.y()))
         self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
-        self.relayout()
+        self.show()
+        self._update_mask()
+
+    def _set_geometry_keep(self, want):
+        """setGeometry + settle re-asserts: mutter applies managed-window
+        geometry asynchronously and may place the window itself."""
+        self._sticker_want_rect = QRect(want)
+        self.setGeometry(want)
+        for delay in (60, 200, 500):
+            QTimer.singleShot(delay, self._reassert_geometry)
+
+    def _reassert_geometry(self):
+        if self._sticker_want_rect is not None and self.isVisible():
+            self.setGeometry(self._sticker_want_rect)
 
     def toggle_fullscreen(self):
+        self._enter_overlay_mode()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         if self._fullscreen:
             self._fullscreen = False
@@ -1545,10 +1599,9 @@ class SnipperWindow(QWidget):
         self._is_latest = True
         self._shapes = []
 
-        self.show()
+        self._enter_sticker_mode()
         self.raise_()
         self.activateWindow()
-        set_always_on_top(self, self._pinned)
         self._refresh_size_label()
         self._update_ui_state()
         log.info("capture: shown visible=%s geo=%dx%d+%d+%d",
