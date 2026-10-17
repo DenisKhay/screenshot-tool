@@ -35,6 +35,10 @@ ICONS = {
              '<path d="M6.5 10l2.5 2.5 4.5-5"/>'),
     "redraw": ('<rect x="3" y="4" width="14" height="11" rx="1" stroke-dasharray="3 2.5"/>'
                '<path d="M12 16l5-5"/><path d="M13.5 11H16v2.5"/>'),
+    "delone": ('<rect x="3" y="4" width="14" height="12" rx="1"/>'
+               '<path d="M7 8.5l6 5M13 8.5l-6 5"/>'),
+    "gear": ('<circle cx="10" cy="10" r="3.2"/>'
+             '<path d="M10 2.5v2.2M10 15.3v2.2M2.5 10h2.2M15.3 10h2.2M4.7 4.7l1.6 1.6M13.7 13.7l1.6 1.6M15.3 4.7l-1.6 1.6M6.3 13.7l-1.6 1.6"/>'),
     "width": ('<path d="M4 5h12" stroke-width="1.4"/>'
               '<path d="M4 10h12" stroke-width="2.8"/>'
               '<path d="M4 15h12" stroke-width="4.2"/>'),

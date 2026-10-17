@@ -258,6 +258,10 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_next)
         self.btn_trash = mkbtn(self.bar_top, "trash", "Clear history (manual)", self.clear_history)
         lay_t.addWidget(self.btn_trash)
+        self.btn_delone = mkbtn(self.bar_top, "delone", "Delete the current screenshot (history + files)", self.delete_current)
+        lay_t.addWidget(self.btn_delone)
+        self.btn_settings = mkbtn(self.bar_top, "gear", "Settings", self._open_settings)
+        lay_t.addWidget(self.btn_settings)
         self.btn_close = mkbtn(self.bar_top, "close", "Hide (Esc)", self._dismiss)
         lay_t.addWidget(self.btn_close)
 
@@ -613,11 +617,41 @@ class SnipperWindow(QWidget):
             new_path = self._persist_baked(img)
             if new_path:
                 entry["path"] = new_path
+                entry.setdefault("files", []).append(new_path)
         else:
             self._persist_baked(img)
         self.btn_undo.setEnabled(False)
         self._refresh_size_label()
         self.update()
+
+    def delete_current(self):
+        """Delete only the current screenshot: history entry plus its files."""
+        if not self.history or not (0 <= self._hist_idx < len(self.history)):
+            return
+        entry = self.history.pop(self._hist_idx)
+        for f in entry.get("files", []):
+            try:
+                Path(f).unlink()
+            except OSError:
+                pass
+        if self.history:
+            self.hist_goto(min(self._hist_idx, len(self.history) - 1))
+        else:
+            self._hist_idx = -1
+            self._image = None
+            self._image_px = None
+            self._is_latest = False
+        self._update_ui_state()
+        self.relayout()
+
+    def _open_settings(self):
+        from .settings_dialog import SettingsDialog
+        SettingsDialog(self.settings, self, self).exec()
+
+    def apply_settings(self, s):
+        """Live-apply what can change at runtime."""
+        self._set_color(QColor(s["color"]))
+        self._set_width(int(s["stroke_width"]))
 
     def clear_history(self):
         self.history = []
@@ -692,6 +726,7 @@ class SnipperWindow(QWidget):
         self.btn_bake.setVisible(has_img)
         self.btn_redraw.setVisible(not self._drawing)
         self.btn_trash.setVisible(bool(self.history))
+        self.btn_delone.setVisible(bool(self.history) and self._image is not None)
         self.btn_prev.setEnabled(bool(self.history) and self._hist_idx > 0)
         self.btn_next.setEnabled(bool(self.history) and self._hist_idx < len(self.history) - 1)
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
@@ -932,6 +967,7 @@ class SnipperWindow(QWidget):
                 new_path = self._persist_baked(self._image)
                 if new_path:
                     entry["path"] = new_path
+                    entry.setdefault("files", []).append(new_path)
                 self.btn_undo.setEnabled(True)
             else:
                 self._shapes.append(shape)
@@ -1100,7 +1136,7 @@ class SnipperWindow(QWidget):
             pass
 
         self.history.append({"image": crop, "base": crop.copy(), "imprints": [],
-                             "path": path,
+                             "path": path, "files": [path],
                              "logical": QSize(self._content.width(), self._content.height())})
         limit = int(self.settings["history_limit"])
         if len(self.history) > limit:
