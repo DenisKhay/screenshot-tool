@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QSlider,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -255,6 +256,17 @@ class _WidthPreview(QWidget):
                    f"{self._width}px")
 
 
+class JumpSlider(QSlider):
+    """Groove click jumps to the clicked value instead of page-stepping."""
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.setValue(QStyle.sliderValueFromPosition(
+                self.minimum(), self.maximum(),
+                int(e.position().x()), max(1, self.width() - 1)))
+        super().mousePressEvent(e)
+
+
 class SnipperWindow(QWidget):
     ipc_command = Signal(str)
 
@@ -354,31 +366,34 @@ class SnipperWindow(QWidget):
             b.clicked.connect(cb)
             return b
 
-        # tools (bottom edge): move, pen, arrow, rect, fill, text, color, width
+        # drawing panel (bottom edge): tools + stroke settings + undo
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
-        self.btn_move = mkbtn(self.bar_bottom, "move", "Move / transform the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
         self.btn_pen = mkbtn(self.bar_bottom, "pen", "Pen (P)", lambda: self.set_tool(TOOL_PEN), True)
         self.btn_arrow = mkbtn(self.bar_bottom, "arrow", "Arrow (A)", lambda: self.set_tool(TOOL_ARROW), True)
         self.btn_rect = mkbtn(self.bar_bottom, "rect", "Rectangle (R)", lambda: self.set_tool(TOOL_RECT), True)
         self.btn_fill = mkbtn(self.bar_bottom, "fillrect", "Filled rectangle — uses the current color (F)", lambda: self.set_tool(TOOL_FILL), True)
         self.btn_text = mkbtn(self.bar_bottom, "text", "Text (T)", lambda: self.set_tool(TOOL_TEXT), True)
-        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text)):
-            self.tool_group.addButton(b, i)
+        self.btn_move = mkbtn(self.bar_right, "move", "Move / transform the frame (M)", lambda: self.set_tool(TOOL_MOVE), True)
+        for tid, b in ((TOOL_PEN, self.btn_pen), (TOOL_ARROW, self.btn_arrow),
+                       (TOOL_RECT, self.btn_rect), (TOOL_FILL, self.btn_fill),
+                       (TOOL_TEXT, self.btn_text)):
+            self.tool_group.addButton(b, tid)
             lay_b.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.tool_group.addButton(self.btn_move, TOOL_MOVE)
         self.btn_move.setChecked(True)
 
         self.btn_color = mkbtn(self.bar_bottom, "pen", "Stroke color", self._open_color_picker)
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
         lay_b.addWidget(self.btn_color, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._open_width_popup)
+        self.btn_width = mkbtn(self.bar_bottom, "width", "Stroke width", self._toggle_width_panel)
         lay_b.addWidget(self.btn_width, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # drawing panel (bottom edge): tools + stroke settings + undo
         self.btn_undo = mkbtn(self.bar_bottom, "undo", "Undo (Ctrl+Z)", self.undo)
         lay_b.addWidget(self.btn_undo, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # adjust (right edge): 1:1, bake, redraw, reset, fullscreen
+        # adjust (right edge): move, 1:1, bake, redraw, reset, fullscreen
         self.btn_11 = QToolButton(self.bar_right)
         self.btn_11.setText("1:1")
         self.btn_11.setFixedSize(BTN, BTN)
@@ -392,7 +407,7 @@ class SnipperWindow(QWidget):
         self.btn_redraw = mkbtn(self.bar_right, "redraw", "Close this rectangle and draw a new one", self.start_redraw)
         self.btn_reset = mkbtn(self.bar_right, "reset", "Clear the frame: hide image and drawings, same size (history kept)", self.reset)
         self.btn_full = mkbtn(self.bar_right, "full", "Fullscreen on the current monitor", self.toggle_fullscreen)
-        for b in (self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
+        for b in (self.btn_move, self.btn_11, self.btn_bake, self.btn_redraw, self.btn_reset, self.btn_full):
             lay_r.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # actions (top edge): camera, copy, pin, opacity, history, trash, delete, settings, close
@@ -449,6 +464,23 @@ class SnipperWindow(QWidget):
         self.text_edit.returnPressed.connect(self._commit_text)
         self.text_edit.editingFinished.connect(self._commit_text)
 
+        self._width_panel = QFrame(self)
+        self._width_panel.setStyleSheet(BTN_CSS)
+        wp = QHBoxLayout(self._width_panel)
+        wp.setContentsMargins(10, 6, 10, 8)
+        wp.setSpacing(8)
+        self._width_preview = _WidthPreview(self._color, self._width)
+        self._width_slider = JumpSlider(Qt.Horizontal, self._width_panel)
+        self._width_slider.setRange(1, 30)
+        self._width_slider.setValue(self._width)
+        self._width_slider.setFixedWidth(170)
+        self._width_slider.setFixedHeight(24)
+        self._width_slider.setCursor(Qt.PointingHandCursor)
+        self._width_slider.valueChanged.connect(self._set_width)
+        wp.addWidget(self._width_preview, 0, Qt.AlignmentFlag.AlignVCenter)
+        wp.addWidget(self._width_slider, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._width_panel.hide()
+
         self._update_ui_state()
 
     # ---------- geometry ----------
@@ -463,6 +495,7 @@ class SnipperWindow(QWidget):
         """Position the edge bars around the frame inside the fixed overlay
         window. Bottom = tools, top = actions, right = adjust; each flips
         inside the frame when there is no room outside."""
+        self._width_panel.hide()
         if self._drawing:
             self.bar_bottom.hide()
             self.bar_top.hide()
@@ -548,6 +581,8 @@ class SnipperWindow(QWidget):
             region = region.united(QRegion(bar.geometry()))
         if self.size_label.isVisible():
             region = region.united(QRegion(self.size_label.geometry()))
+        if self._width_panel.isVisible():
+            region = region.united(QRegion(self._width_panel.geometry()))
         set_input_region(self, region)
 
     def _place_size_label(self):
@@ -638,9 +673,13 @@ class SnipperWindow(QWidget):
         if self._text_editing:
             return
         self._tool = tool
-        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text)):
-            b.setChecked(i == tool)
-            b.setIcon(icons.svg_icon(TOOL_NAMES[i], icons.DARK if i == tool else icons.LIGHT))
+        if self._width_panel.isVisible():
+            self._hide_width_panel()
+        for tid, b in ((TOOL_MOVE, self.btn_move), (TOOL_PEN, self.btn_pen),
+                       (TOOL_ARROW, self.btn_arrow), (TOOL_RECT, self.btn_rect),
+                       (TOOL_FILL, self.btn_fill), (TOOL_TEXT, self.btn_text)):
+            b.setChecked(tid == tool)
+            b.setIcon(icons.svg_icon(TOOL_NAMES[tid], icons.DARK if tid == tool else icons.LIGHT))
 
     def _refresh_text_style(self):
         self.text_edit.setStyleSheet(
@@ -656,8 +695,34 @@ class SnipperWindow(QWidget):
 
     def _set_width(self, w: int):
         self._width = int(w)
+        self._width_preview.set_state(self._color, self._width)
         self._refresh_text_style()
         self.update()
+
+    def _width_btn_rect(self) -> QRect:
+        return self.btn_width.geometry().translated(self.bar_bottom.geometry().topLeft())
+
+    def _toggle_width_panel(self):
+        if self._width_panel.isVisible():
+            self._hide_width_panel()
+            return
+        self._width_slider.setValue(self._width)
+        self._width_preview.set_state(self._color, self._width)
+        self._width_panel.adjustSize()
+        bg = self._width_btn_rect()
+        px = bg.center().x() - self._width_panel.width() // 2
+        px = max(PAD, min(px, self._desktop.width() - self._width_panel.width() - PAD))
+        py = bg.top() - GAP - self._width_panel.height()
+        if py < 0:
+            py = bg.bottom() + GAP
+        self._width_panel.setGeometry(px, py, self._width_panel.width(), self._width_panel.height())
+        self._width_panel.show()
+        self._width_panel.raise_()
+        self._update_mask()
+
+    def _hide_width_panel(self):
+        self._width_panel.hide()
+        self._update_mask()
 
     def _open_color_picker(self):
         menu = QMenu(self)
@@ -699,32 +764,6 @@ class SnipperWindow(QWidget):
         c = QColorDialog.getColor(self._color, self, "Stroke color")
         if c.isValid():
             self._set_color(c)
-
-    def _open_width_popup(self):
-        panel = QWidget(None, Qt.Popup | Qt.FramelessWindowHint)
-        panel.setAttribute(Qt.WA_TranslucentBackground)
-        panel.setStyleSheet("QWidget { background: rgba(13, 43, 82, 242); }")
-        v = QHBoxLayout(panel)
-        v.setContentsMargins(14, 8, 14, 10)
-        v.setSpacing(8)
-        prev = _WidthPreview(self._color, self._width)
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(1, 30)
-        slider.setValue(self._width)
-        slider.setFixedWidth(190)
-        slider.setCursor(Qt.PointingHandCursor)
-
-        def on_change(val):
-            self._set_width(val)
-            prev.set_state(self._color, val)
-
-        slider.valueChanged.connect(on_change)
-        v.addWidget(prev)
-        v.addWidget(slider)
-        panel.adjustSize()
-        gp = self.btn_width.mapToGlobal(QPoint(0, 0))
-        panel.move(gp.x() - 24, max(4, gp.y() - panel.height() - 8))
-        panel.show()
 
     def undo(self):
         if self._text_editing:
@@ -1065,6 +1104,8 @@ class SnipperWindow(QWidget):
             return
         pos = e.position().toPoint()
         gpos = e.globalPosition().toPoint()
+        if self._width_panel.isVisible() and not self._width_panel.geometry().contains(pos):
+            self._hide_width_panel()
         if self._drawing:
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
@@ -1251,7 +1292,7 @@ class SnipperWindow(QWidget):
 
     def _open_text_editor(self, pos: QPoint):
         self._text_editing = True
-        self.text_edit.setGeometry(QRect(self._content.topLeft() + pos, QSize(260, 10 + self._width * 4)))
+        self.text_edit.setGeometry(QRect(pos, QSize(260, 10 + self._width * 4)))
         self.text_edit.show()
         self.text_edit.raise_()
         self.text_edit.setFocus()
@@ -1450,6 +1491,8 @@ class SnipperWindow(QWidget):
         self._image = None
         self._image_px = None
         self._is_latest = False
+        if self._width_panel.isVisible():
+            self._width_panel.hide()
         if self._text_editing:
             self._close_text_editor()
         self._update_ui_state()
@@ -1461,7 +1504,9 @@ class SnipperWindow(QWidget):
         self.hide()
 
     def _on_escape(self):
-        if self._text_editing:
+        if self._width_panel.isVisible():
+            self._hide_width_panel()
+        elif self._text_editing:
             self._cancel_text()
         elif self._drawing:
             self._dismiss()
