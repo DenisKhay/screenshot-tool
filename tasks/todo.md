@@ -64,6 +64,10 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       it DRAGS to reposition (TextEditor: plain click = caret, drag =
       move); commit uses the dragged position. debug IPC: dumps state
       to the journal.
+- [x] Text commit alignment: shape anchors at the editor's real
+      baseline (font metrics: ascent + vertical centering) and draws
+      at the baseline point — no vertical jump on commit at any size
+      (cross-correlated editor grab vs committed capture: ~1px).
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
