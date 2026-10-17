@@ -299,6 +299,40 @@ class JumpSlider(QSlider):
         super().mousePressEvent(e)
 
 
+class TextEditor(QLineEdit):
+    """Text tool editor: plain click edits the caret, drag moves the box."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._press = None
+        self._dragging = False
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._press = e.globalPosition().toPoint()
+            self._dragging = False
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._press is not None and (e.buttons() & Qt.LeftButton):
+            d = e.globalPosition().toPoint() - self._press
+            if d.manhattanLength() > 4:
+                self._dragging = True
+                self.move(self.pos() + d)
+                self._press = e.globalPosition().toPoint()
+                return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        dragged = self._dragging
+        self._press = None
+        self._dragging = False
+        if dragged:
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+
 class SnipperWindow(QWidget):
     ipc_command = Signal(str)
 
@@ -493,7 +527,7 @@ class SnipperWindow(QWidget):
         self.size_label.setCursor(Qt.ArrowCursor)
         self.size_label.hide()
 
-        self.text_edit = QLineEdit(self)
+        self.text_edit = TextEditor(self)
         self.text_edit.hide()
         self._refresh_text_style()
         self.text_edit.returnPressed.connect(self._commit_text)
@@ -727,7 +761,7 @@ class SnipperWindow(QWidget):
 
     def set_tool(self, tool):
         if self._text_editing:
-            return
+            self._commit_text()
         self._tool = tool
         if self._width_panel.isVisible():
             self._hide_width_panel()
@@ -1199,6 +1233,11 @@ class SnipperWindow(QWidget):
             self._hide_width_panel()
         if self._textsize_panel.isVisible() and not self._textsize_panel.geometry().contains(pos):
             self._hide_textsize_panel()
+        if self._text_editing:
+            # first click anywhere releases the editor; it must not
+            # fall through and instantly open a new one
+            self._commit_text()
+            return
         if self._drawing:
             self._draw_start = pos
             self._content = QRect(pos, QSize(0, 0))
@@ -1222,8 +1261,6 @@ class SnipperWindow(QWidget):
             self._drag_offset = pos - self._content.topLeft()
             self._drag_offset_global = gpos - self.content_global_rect().topLeft()
             return
-        if self._text_editing:
-            self._commit_text()
 
         cp = QPointF(pos) - QPointF(self._content.topLeft())
         if self._tool == TOOL_PEN:
@@ -1623,6 +1660,10 @@ class SnipperWindow(QWidget):
             self.hide()
         elif cmd == "capture":
             self.do_capture()
+        elif cmd == "debug":
+            log.info("state: tool=%s editing=%s content=%s editor=%s width=%s text_size=%s shapes=%d",
+                     self._tool, self._text_editing, self._content,
+                     self.text_edit.geometry(), self._width, self._text_size, len(self._shapes))
         elif cmd == "quit":
             QApplication.quit()
 
