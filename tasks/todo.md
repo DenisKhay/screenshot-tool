@@ -47,10 +47,13 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
 - [x] Capture backend: portal via jeepney, crop by frame rect, DPR-aware, drawings composited
 - [x] Window: transparent frame, 4 corner grips, body-drag move, toolbar strip
       (adaptive icon toolbar: below / above / inside overlay), fullscreen expand
-- [x] Tools: single drawing panel (bottom edge): move, pen, arrow, rect,
-      fill, text, color, width, undo — all drawing instruments in one
-      place; right bar holds frame/view ops (1:1, bake, redraw, reset,
-      fullscreen)
+- [x] Tools: single drawing panel (bottom edge): pen, arrow, rect, fill,
+      text, color, width, undo; right bar holds frame/view ops (move,
+      1:1, bake, redraw, reset, fullscreen)
+- [x] Width picker: child-panel dropdown from the icon (slider +
+      live preview, jump-to-click). Qt.Popup panels never map under the
+      bypass/OR overlay — child widgets only (text_edit pattern).
+      Text editor anchors at the click point (was content.tl+pos).
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
