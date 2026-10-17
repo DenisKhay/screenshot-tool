@@ -367,12 +367,10 @@ class SnipperWindow(QWidget):
         self._last_rect = None
         self._pre_draw_content = None
         self._content = QRect(0, 0, settings["default_width"], settings["default_height"])
-        self._strip_mode = "below"
         self._fullscreen = False
         self._pre_fs = None
         self._pinned = True
         self._busy = False
-        self._overlay_want = None
 
         self._image = None
         self._image_px = None
@@ -1080,28 +1078,16 @@ class SnipperWindow(QWidget):
         self._apply_pin()
 
     def _apply_pin(self):
-        """Pinned (sticker mode): the window hugs just the shot — compact and
-        always-on-top. Unpinned: full interactive session (window spans the
-        desktop). Either way the shot itself never moves: its global position
-        is preserved, and the window origin stays frozen during resizes."""
+        """Pin is the always-on-top marker only: the bypass overlay is
+        inherently on top and must always span the desktop. The old hug
+        (setGeometry around the shot — a managed-window-era relic) jumped
+        the frame, clipped the right bar and flipped drags into
+        window-move mode."""
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         cg = self.content_global_rect()
-        above = self._strip_mode == "above"
-        if self._pinned and not self._fullscreen:
-            m_t = PAD
-            m_b = PAD
-        else:
-            m_t = (GAP + TB_H + PAD if above else PAD)
-            m_b = (PAD if above else GAP + TB_H + PAD)
-        m_l = m_r = PAD
-        win_x, win_y = cg.left() - m_l, cg.top() - m_t
-        win_w = cg.width() + m_l + m_r
-        win_h = cg.height() + m_t + m_b
-        self._content.moveTopLeft(QPoint(m_l, m_t))
-        self.setGeometry(win_x, win_y, win_w, win_h)
-        self._overlay_want = QRect(win_x, win_y, win_w, win_h)
+        self._content.moveTopLeft(QPoint(cg.left() - vg.x(), cg.top() - vg.y()))
+        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
         self.relayout()
-        set_always_on_top(self, True)
 
     def toggle_fullscreen(self):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -1706,8 +1692,8 @@ class SnipperWindow(QWidget):
         elif cmd == "capture":
             self.do_capture()
         elif cmd == "debug":
-            log.info("state: tool=%s editing=%s content=%s editor=%s width=%s text_size=%s shapes=%d",
-                     self._tool, self._text_editing, self._content,
+            log.info("state: tool=%s editing=%s content=%s window=%s editor=%s width=%s text_size=%s shapes=%d",
+                     self._tool, self._text_editing, self._content, self.geometry(),
                      self.text_edit.geometry(), self._width, self._text_size, len(self._shapes))
         elif cmd == "quit":
             QApplication.quit()
