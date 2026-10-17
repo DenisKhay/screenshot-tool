@@ -299,6 +299,7 @@ class SnipperWindow(QWidget):
 
         self._pending = None
         self._drag_offset = None
+        self._drag_offset_global = None
         self._resize_corner = None
         self._resize_ref = None
         self._text_editing = False
@@ -470,6 +471,12 @@ class SnipperWindow(QWidget):
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
             bar.show()
 
+        self._place_bars()
+        self._place_size_label()
+        self._update_mask()
+        self.update()
+
+    def _place_bars(self):
         cw, ch = self._content.width(), self._content.height()
         d_w, d_h = self._desktop.width(), self._desktop.height()
 
@@ -503,9 +510,21 @@ class SnipperWindow(QWidget):
             rx = self._content.right() - rb.width() - 4
         self.bar_right.setGeometry(rx, ry, rb.width(), rb.height())
 
+    def _window_covers_desktop(self):
+        return (self.width() >= self._desktop.width() and
+                self.height() >= self._desktop.height())
+
+    def _move_content_to(self, tl: QPoint):
+        """Drag primitive (full-desktop overlay): move only the content rect,
+        repaint only the band it left/entered. Moving the window too doubled
+        the speed — the frame raced ahead of the cursor."""
+        m = TB_H + GAP + PAD
+        dirty = QRegion(self._content.adjusted(-m, -m, m, m))
+        self._content.moveTopLeft(tl)
+        self._place_bars()
         self._place_size_label()
         self._update_mask()
-        self.update()
+        self.update(dirty.united(QRegion(self._content.adjusted(-m, -m, m, m))))
 
     def _ant_step(self):
         # animate only while selecting; a captured shot freezes the border
@@ -1064,6 +1083,7 @@ class SnipperWindow(QWidget):
         view_hist = self._image is not None and not self._is_latest
         if view_hist or self._tool == TOOL_MOVE:
             self._drag_offset = pos - self._content.topLeft()
+            self._drag_offset_global = gpos - self.content_global_rect().topLeft()
             return
         if self._text_editing:
             self._commit_text()
@@ -1083,6 +1103,7 @@ class SnipperWindow(QWidget):
 
     def mouseMoveEvent(self, e):
         pos = e.position().toPoint()
+        gpos = e.globalPosition().toPoint()
 
         if self._resize_corner and self._resize_ref:
             self._do_resize(pos)
@@ -1095,15 +1116,22 @@ class SnipperWindow(QWidget):
                 self.update()
             return
         if self._drag_offset is not None:
-            tl = pos - self._drag_offset
-            tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
-            tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
-            old_tl = self._content.topLeft()
-            d = tl - old_tl
-            self._content.moveTopLeft(tl)
-            # the overlay hugs the shot: move it by the same delta so nothing clips
-            self.move(self.pos() + d)
-            self._update_mask()
+            if self._window_covers_desktop():
+                tl = pos - self._drag_offset
+                tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
+                tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+                self._move_content_to(tl)
+            else:
+                # compact (hugged) window: the shot is glued to the window,
+                # so move the window 1:1 and keep the content fixed inside it
+                vg = QGuiApplication.primaryScreen().virtualGeometry()
+                gtl = gpos - self._drag_offset_global
+                gtl.setX(max(vg.x(), min(gtl.x(),
+                         vg.x() + self._desktop.width() - self._content.width())))
+                gtl.setY(max(vg.y(), min(gtl.y(),
+                         vg.y() + self._desktop.height() - self._content.height())))
+                self.move(gtl - self._content.topLeft())
+                self.update()
             return
         if self._pending is not None:
             cp = QPointF(pos) - QPointF(self._content.topLeft())
@@ -1138,6 +1166,7 @@ class SnipperWindow(QWidget):
             self.relayout()
         if self._drag_offset is not None:
             self._drag_offset = None
+            self._drag_offset_global = None
             self.relayout()
         if self._pending is not None:
             shape = self._pending
@@ -1339,13 +1368,14 @@ class SnipperWindow(QWidget):
             d = pos - last
             if d.isNull():
                 return
-            tl = self._content.topLeft() + d
-            tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
-            tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
-            self._content.moveTopLeft(tl)
-            # the overlay hugs the shot: follow the same delta
-            self.move(self.pos() + d)
-            self._update_mask()
+            if self._window_covers_desktop():
+                tl = self._content.topLeft() + d
+                tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
+                tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+                self._move_content_to(tl)
+            else:
+                self.move(self.pos() + d)
+                self.update()
             last = pos
 
         drag_timer = QTimer(self)

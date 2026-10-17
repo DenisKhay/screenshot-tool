@@ -19,6 +19,12 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
 - Input-only X shape went STALE across hide/show: _update_mask ran while
   hidden (skipped), then draw mode would have applied an empty region.
   FIX: draw mode = full input (None region), re-applied after show().
+- Frame drag jerked violently: drag moved content AND window by the same
+  delta = shot moved 2x cursor speed (feedback via window-relative
+  coords). Was a keep-inside-clamped-overlay hack; unnecessary now.
+  FIX: drag moves exactly ONE thing — content rect (full-desktop
+  window) or the hugged window 1:1 (global grab offset). Repaints are
+  limited to the frame's old/new band, not the whole 4480x1440 overlay.
 
 ## Key findings (capture path on miku)
 - `org.gnome.Shell.Screenshot` D-Bus: AccessDenied for unsandboxed apps (GNOME 46).
