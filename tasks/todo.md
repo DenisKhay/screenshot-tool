@@ -68,6 +68,13 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       baseline (font metrics: ascent + vertical centering) and draws
       at the baseline point — no vertical jump on commit at any size
       (cross-correlated editor grab vs committed capture: ~1px).
+- [x] Pin button jump: _apply_pin still performed the managed-window-era
+      sticker hug (setGeometry around the shot) — every pin click shrank
+      the full-desktop overlay (window 4480x1440 -> 713x413), jumped the
+      frame, clipped the right bar and flipped drags into window-move
+      mode. Pin is now purely the always-on-top marker (inherent to the
+      bypass overlay); _apply_pin re-asserts full-desktop geometry only.
+      Repro/verify via debug IPC (now includes window geometry).
 - [x] Ctrl+C reliability: (1) single-instance guarantee — ipc.serve used
       to force-unlink the socket, so a cold start during a busy capture
       stole it and orphaned the previous overlay (stacked overlays,
