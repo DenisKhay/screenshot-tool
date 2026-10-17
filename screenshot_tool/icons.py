@@ -16,6 +16,7 @@ ICONS = {
     "arrow": '<path d="M4 16L16 4"/><path d="M9 4h7v7"/>',
     "rect": '<rect x="4" y="5" width="12" height="10" rx="1"/>',
     "text": '<path d="M5 5h10M10 5v10"/>',
+    "fillrect": '<rect x="4" y="5" width="12" height="10" fill="{c}" stroke="none"/>',
     "undo": '<path d="M6 4L3 7l3 3"/><path d="M3 7h8a5 5 0 0 1 0 10H8"/>',
     "reset": '<path d="M16 10a6 6 0 1 1-1.8-4.3"/><path d="M16 3v4h-4"/>',
     "full": '<path d="M3 7V3h4M17 7V3h-4M3 13v4h4M17 13v4h-4"/>',

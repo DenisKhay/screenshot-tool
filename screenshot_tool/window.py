@@ -32,44 +32,47 @@ from PySide6.QtWidgets import (
 
 from . import capture, icons
 from .settings import Settings
-from .shapes import ArrowShape, PenShape, RectShape, TextShape, render_shapes
+from .shapes import ArrowShape, FilledRectShape, PenShape, RectShape, TextShape, render_shapes
 
 log = logging.getLogger("screenshot_tool")
 
-ACCENT = "#00bcd4"
-CHROME_FG = "#eceff1"
+ACCENT = "#9fc9f0"        # blueprint light blue
+INK = "#cfe4f7"           # hint text
+PANEL_BG = "rgba(13, 43, 82, 235)"
+PANEL_BORDER = "#2f6ea5"
+CAPTURE_ACCENT = "#ffd54f"  # blueprint yellow accent
 TB_H = 38   # toolbar row height
 GAP = 6     # gap between frame and toolbar row
-PAD = 6     # window margin around the frame (room for the handle dots)
+PAD = 6     # window margin around the frame
 BTN = 30    # icon button size
 GRIP = 10   # grip hit radius
 MIN_W, MIN_H = 240, 160
 
-TOOL_MOVE, TOOL_PEN, TOOL_ARROW, TOOL_RECT, TOOL_TEXT = range(5)
-TOOL_NAMES = ["move", "pen", "arrow", "rect", "text"]
+TOOL_MOVE, TOOL_PEN, TOOL_ARROW, TOOL_RECT, TOOL_FILL, TOOL_TEXT = range(6)
+TOOL_NAMES = ["move", "pen", "arrow", "rect", "fillrect", "text"]
 PALETTE = ["#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#ffffff", "#000000"]
 
 BTN_CSS = f"""
-QFrame {{ background: transparent; }}
-QToolButton {{ background: rgba(38, 50, 56, 215); border: none; border-radius: 6px; padding: 0; }}
-QToolButton:hover {{ background: rgba(55, 71, 79, 240); }}
-QToolButton:checked {{ background: {ACCENT}; }}
-QToolButton:disabled {{ background: rgba(38, 50, 56, 110); }}
+QFrame {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; }}
+QToolButton {{ background: transparent; border: 1px solid transparent; padding: 0; }}
+QToolButton:hover {{ background: rgba(47, 110, 165, 170); border-color: {PANEL_BORDER}; }}
+QToolButton:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+QToolButton:disabled {{ background: rgba(13, 43, 82, 120); }}
 QSlider {{ background: transparent; }}
-QSlider::groove:horizontal {{ height: 3px; background: rgba(236,239,241,70); border-radius: 1px; }}
-QSlider::handle:horizontal {{ width: 10px; height: 10px; margin: -4px 0; border-radius: 5px; background: {ACCENT}; }}
+QSlider::groove:horizontal {{ height: 3px; background: rgba(159,201,240,90); }}
+QSlider::handle:horizontal {{ width: 10px; height: 10px; margin: -4px 0; background: {ACCENT}; }}
 """
 
-CAPTURE_CSS = """
-QToolButton { background: #43a047; border-radius: 17px; }
-QToolButton:hover { background: #4caf50; }
-QToolButton:pressed { background: #2e7d32; }
+CAPTURE_CSS = f"""
+QToolButton {{ background: {PANEL_BG}; border: 2px solid {CAPTURE_ACCENT}; }}
+QToolButton:hover {{ background: rgba(47, 110, 165, 200); }}
+QToolButton:pressed {{ background: rgba(6, 24, 43, 235); }}
 """
 
 LABEL_CSS = f"""
 QLabel {{
-  background: {ACCENT}; color: #102027; font-size: 11px; font-weight: bold;
-  padding: 1px 6px; border-radius: 4px;
+  background: {PANEL_BG}; color: #ffffff; border: 1px solid {PANEL_BORDER};
+  font-size: 11px; font-weight: bold; padding: 1px 6px;
 }}
 """
 
@@ -245,11 +248,23 @@ class SnipperWindow(QWidget):
         QShortcut(QKeySequence("Ctrl+C"), self,
                   lambda: None if self._text_editing else self.do_capture())
         for key, t in (("m", TOOL_MOVE), ("p", TOOL_PEN), ("a", TOOL_ARROW),
-                       ("r", TOOL_RECT), ("t", TOOL_TEXT)):
+                       ("r", TOOL_RECT), ("f", TOOL_FILL), ("t", TOOL_TEXT)):
             QShortcut(QKeySequence(key), self,
                       lambda t=t: None if self._text_editing else self.set_tool(t))
 
+        self._ant_phase = 0.0
+        self._ant_timer = QTimer(self)
+        self._ant_timer.setInterval(90)
+        self._ant_timer.timeout.connect(self._ant_step)
+        self._ant_timer.start()
+
         self.ipc_command.connect(self._on_ipc)
+
+    def _ant_step(self):
+        if not self.isVisible():
+            return
+        self._ant_phase = (self._ant_phase + 2.2) % 16.0
+        self.update()
 
     # ---------- UI construction ----------
 
@@ -287,8 +302,9 @@ class SnipperWindow(QWidget):
         self.btn_pen = mkbtn(self.bar_bottom, "pen", "Pen (P)", lambda: self.set_tool(TOOL_PEN), True)
         self.btn_arrow = mkbtn(self.bar_bottom, "arrow", "Arrow (A)", lambda: self.set_tool(TOOL_ARROW), True)
         self.btn_rect = mkbtn(self.bar_bottom, "rect", "Rectangle (R)", lambda: self.set_tool(TOOL_RECT), True)
+        self.btn_fill = mkbtn(self.bar_bottom, "fillrect", "Filled rectangle — uses the current color (F)", lambda: self.set_tool(TOOL_FILL), True)
         self.btn_text = mkbtn(self.bar_bottom, "text", "Text (T)", lambda: self.set_tool(TOOL_TEXT), True)
-        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
+        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text)):
             self.tool_group.addButton(b, i)
             lay_b.addWidget(b)
         self.btn_move.setChecked(True)
@@ -307,7 +323,7 @@ class SnipperWindow(QWidget):
         self.btn_11.setToolTip("Reset scale: frame shows the image pixel-per-pixel")
         self.btn_11.setStyleSheet(
             f"QToolButton {{ background: rgba(38,50,56,215); border: none; border-radius: 6px;"
-            f" color: {CHROME_FG}; font-size: 10px; font-weight: bold; }}"
+            f" color: {INK}; font-size: 10px; font-weight: bold; }}"
             f"QToolButton:hover {{ background: rgba(55,71,79,240); }}")
         self.btn_11.clicked.connect(self.reset_scale)
         self.btn_bake = mkbtn(self.bar_right, "bake", "Bake: commit the resized scale into the image", self.bake_scale)
@@ -319,7 +335,7 @@ class SnipperWindow(QWidget):
 
         # actions (top edge): camera, copy, pin, opacity, history, close
         self.capture_btn = QToolButton(self.bar_top)
-        self.capture_btn.setIcon(icons.svg_icon("camera", "#ffffff"))
+        self.capture_btn.setIcon(icons.svg_icon("camera", CAPTURE_ACCENT))
         self.capture_btn.setIconSize(QSize(20, 20))
         self.capture_btn.setFixedSize(34, 34)
         self.capture_btn.setStyleSheet(CAPTURE_CSS)
@@ -331,6 +347,7 @@ class SnipperWindow(QWidget):
         self.btn_copy = mkbtn(self.bar_top, "copy", "Copy image to clipboard", self.copy_image)
         lay_t.addWidget(self.btn_copy)
         self.btn_pin = mkbtn(self.bar_top, "pin", "Always on top", self.toggle_pin, True)
+        self.btn_pin.setChecked(True)
         lay_t.addWidget(self.btn_pin)
 
         self.opacity_slider = QSlider(Qt.Horizontal, self.bar_top)
@@ -345,7 +362,7 @@ class SnipperWindow(QWidget):
         self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
         self.hist_label = QLabel("0/0", self.bar_top)
         self.hist_label.setCursor(Qt.ArrowCursor)
-        self.hist_label.setStyleSheet(f"QLabel {{ color: {CHROME_FG}; font-size: 11px; background: transparent; }}")
+        self.hist_label.setStyleSheet(f"QLabel {{ color: {INK}; font-size: 11px; background: transparent; }}")
         self.btn_next = mkbtn(self.bar_top, "next", "Next capture (→)", lambda: self.hist_step(1))
         lay_t.addWidget(self.btn_prev)
         lay_t.addWidget(self.hist_label)
@@ -545,7 +562,7 @@ class SnipperWindow(QWidget):
         if self._text_editing:
             return
         self._tool = tool
-        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text)):
+        for i, b in enumerate((self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text)):
             b.setChecked(i == tool)
             b.setIcon(icons.svg_icon(TOOL_NAMES[i], icons.DARK if i == tool else icons.LIGHT))
 
@@ -798,19 +815,34 @@ class SnipperWindow(QWidget):
         if self._pinned:
             self.raise_()
         self.activateWindow()
-        # the WM places a newly-mapped managed window itself; re-assert the
-        # desktop geometry after mapping so the overlay never visibly jumps
-        QTimer.singleShot(0, self._reassert_geometry)
-        QTimer.singleShot(120, self._reassert_geometry)
-        # the platform window was re-created; let it settle before the raw
-        # X shape call touches the (new) window id
+        # the WM places a newly-mapped managed window itself; hold the overlay
+        # geometry until it sticks (also lets the re-created platform window
+        # settle before the raw X shape call touches the new window id)
+        self._settle_overlay()
         QTimer.singleShot(60, self.relayout)
 
-    def _reassert_geometry(self):
+    def _settle_overlay(self):
+        """After a pin/unpin (window re-creation) the WM may re-place the
+        managed window asynchronously; hold the overlay geometry until it
+        sticks."""
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         want = QRect(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
-        if self.geometry() != want:
-            self.setGeometry(want)
+        state = {"ticks": 0, "good": 0}
+        timer = QTimer(self)
+
+        def tick():
+            state["ticks"] += 1
+            if self.geometry() != want:
+                self.setGeometry(want)
+                state["good"] = 0
+            else:
+                state["good"] += 1
+            if state["good"] >= 6 or state["ticks"] >= 30:
+                timer.stop()
+
+        timer.timeout.connect(tick)
+        timer.start(50)
+        self._settle_timer = timer
 
     def toggle_fullscreen(self):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -833,7 +865,7 @@ class SnipperWindow(QWidget):
         view_hist = has_img and not self._is_latest
         tools_on = has_img and not view_hist
 
-        for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text):
+        for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_fill, self.btn_text):
             b.setEnabled(tools_on or not has_img)
         self.btn_color.setEnabled(tools_on or not has_img)
         self.btn_width.setEnabled(tools_on or not has_img)
@@ -875,13 +907,15 @@ class SnipperWindow(QWidget):
                 # dim everything outside the rect being pulled
                 outside = QRegion(self.rect()).subtracted(QRegion(self._content))
                 p.setClipRegion(outside)
-                p.fillRect(self.rect(), QColor(0, 0, 0, 70))
+                p.fillRect(self.rect(), QColor(6, 24, 43, 110))
                 p.setClipping(False)
                 pen = QPen(QColor(ACCENT), 2)
                 p.setPen(pen)
                 p.drawRect(self._content.adjusted(1, 1, -1, -1))
             else:
-                p.setPen(QColor(255, 255, 255, 120))
+                hint = QColor("#cfe4f7")
+                hint.setAlpha(200)
+                p.setPen(hint)
                 f = p.font()
                 f.setPixelSize(15)
                 p.setFont(f)
@@ -893,12 +927,14 @@ class SnipperWindow(QWidget):
             p.drawImage(c, self._image)
             p.setOpacity(1.0)
         else:
-            p.setPen(QColor(255, 255, 255, 90))
+            dim = QColor("#cfe4f7")
+            dim.setAlpha(160)
+            p.setPen(dim)
             f = p.font()
             f.setPixelSize(13)
             p.setFont(f)
             p.drawText(c, Qt.AlignCenter,
-                       "Adjust the frame, annotate, then press the green camera button to capture")
+                       "Adjust the frame, annotate, then press the yellow camera button (or Ctrl+C) to capture")
 
         p.save()
         p.setClipRect(c)
@@ -914,7 +950,10 @@ class SnipperWindow(QWidget):
 
         border = QColor(ACCENT)
         border.setAlpha(self._border_alpha)
-        p.setPen(QPen(border, 2))
+        pen = QPen(border, 2, Qt.PenStyle.DashLine)
+        pen.setDashOffset(self._ant_phase)
+        pen.setDashPattern([5.0, 5.0])
+        p.setPen(pen)
         p.drawRect(c.adjusted(1, 1, -1, -1))
 
 
@@ -1018,6 +1057,10 @@ class SnipperWindow(QWidget):
             self._pending = ArrowShape(self._color, self._width, cp, cp)
         elif self._tool == TOOL_RECT:
             self._pending = RectShape(self._color, self._width, cp, cp)
+        elif self._tool == TOOL_FILL:
+            self._pending = FilledRectShape(self._color, self._width, cp, cp)
+        elif self._tool == TOOL_FILL:
+            self._pending = FilledRectShape(self._color, self._width, cp, cp)
         elif self._tool == TOOL_TEXT:
             self._open_text_editor(pos)
         self.update()

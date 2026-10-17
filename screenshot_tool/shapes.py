@@ -71,6 +71,21 @@ class RectShape(Shape):
         painter.drawRect(self.rect())
 
 
+class FilledRectShape(Shape):
+    def __init__(self, color, width, p1, p2):
+        super().__init__(color, width)
+        self.p1 = p1
+        self.p2 = p2
+
+    def rect(self):
+        return QRectF(self.p1, self.p2).normalized()
+
+    def draw(self, painter):
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self.color)
+        painter.drawRect(self.rect())
+
+
 class TextShape(Shape):
     def __init__(self, color, width, pos, text):
         super().__init__(color, width)
