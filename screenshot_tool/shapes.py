@@ -87,14 +87,15 @@ class FilledRectShape(Shape):
 
 
 class TextShape(Shape):
-    def __init__(self, color, width, pos, text):
-        super().__init__(color, width)
+    def __init__(self, color, size, pos, text):
+        super().__init__(color, size)
+        self.size = size
         self.pos = pos
         self.text = text
 
     def font(self):
         f = QFont()
-        f.setPixelSize(10 + self.width * 4)
+        f.setPixelSize(self.size)
         return f
 
     def draw(self, painter):

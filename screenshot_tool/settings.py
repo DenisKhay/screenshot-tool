@@ -10,6 +10,7 @@ DEFAULTS = {
     "default_opacity": 100,  # percent, applied to captured image
     "color": "#e53935",
     "stroke_width": 3,
+    "text_size": 18,
     "filename_pattern": "shot_%Y%m%d_%H%M%S",
     "format": "png",
     "history_limit": 20,

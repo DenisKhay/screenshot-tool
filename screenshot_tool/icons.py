@@ -43,6 +43,8 @@ ICONS = {
              '</g>'),    "width": ('<path d="M4 5h12" stroke-width="1.4"/>'
               '<path d="M4 10h12" stroke-width="2.8"/>'
               '<path d="M4 15h12" stroke-width="4.2"/>'),
+    "textsize": ('<path d="M3 16L8 4l5 12"/><path d="M5 11.5h6"/>'
+                 '<path d="M16.5 6v9M14.5 8l2-2 2 2M14.5 13l2 2 2-2"/>'),
 }
 
 
