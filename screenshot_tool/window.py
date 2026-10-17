@@ -288,7 +288,7 @@ class SnipperWindow(QWidget):
 
         self.btn_copy = mkbtn(self.bar_top, "copy", "Copy image to clipboard", self.copy_image)
         lay_t.addWidget(self.btn_copy)
-        self.btn_pin = mkbtn(self.bar_top, "pin", "Pin on top (hide chrome)", self.toggle_pin, True)
+        self.btn_pin = mkbtn(self.bar_top, "pin", "Always on top", self.toggle_pin, True)
         lay_t.addWidget(self.btn_pin)
 
         self.opacity_slider = QSlider(Qt.Horizontal, self.bar_top)
@@ -743,10 +743,14 @@ class SnipperWindow(QWidget):
         self.update()
 
     def toggle_pin(self):
+        """Only switches always-on-top. The overlay is inherently above all
+        managed windows; pinning re-asserts it and unpinning releases the
+        claim. No other behavior is attached."""
         self._pinned = not self._pinned
         self.btn_pin.setChecked(self._pinned)
-        self._update_ui_state()
-        self.relayout()
+        if self._pinned:
+            self.raise_()
+            self.activateWindow()
 
     def toggle_fullscreen(self):
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -767,7 +771,7 @@ class SnipperWindow(QWidget):
     def _update_ui_state(self):
         has_img = self._image is not None
         view_hist = has_img and not self._is_latest
-        tools_on = has_img and not view_hist and not self._pinned
+        tools_on = has_img and not view_hist
 
         for b in (self.btn_move, self.btn_pen, self.btn_arrow, self.btn_rect, self.btn_text):
             b.setEnabled(tools_on or not has_img)
@@ -787,14 +791,13 @@ class SnipperWindow(QWidget):
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
         self.btn_trash.setEnabled(bool(self.history))
 
-        self.capture_btn.setVisible(not self._pinned)
+        self.capture_btn.setVisible(True)
         if self._drawing:
             for bar in (self.bar_bottom, self.bar_top, self.bar_right):
                 bar.hide()
         else:
-            self.bar_bottom.setVisible(not self._pinned)
-            self.bar_right.setVisible(not self._pinned)
-            # top bar stays: pin toggle + close remain reachable while pinned
+            self.bar_bottom.setVisible(True)
+            self.bar_right.setVisible(True)
         if has_img:
             self.opacity_slider.setValue(int(self._opacity * 100))
 
@@ -829,7 +832,7 @@ class SnipperWindow(QWidget):
             p.setOpacity(self._opacity)
             p.drawImage(c, self._image)
             p.setOpacity(1.0)
-        elif not self._pinned:
+        else:
             p.setPen(QColor(255, 255, 255, 90))
             f = p.font()
             f.setPixelSize(13)
@@ -897,8 +900,6 @@ class SnipperWindow(QWidget):
     EDGE_ZONE = 8
 
     def _grip_at(self, pos: QPoint):
-        if self._pinned:
-            return None
         c = self._content
         for name, pt in (("tl", c.topLeft()), ("tr", c.topRight()),
                          ("bl", c.bottomLeft()), ("br", c.bottomRight())):
@@ -944,7 +945,7 @@ class SnipperWindow(QWidget):
             return
 
         view_hist = self._image is not None and not self._is_latest
-        if self._pinned or view_hist or self._tool == TOOL_MOVE:
+        if view_hist or self._tool == TOOL_MOVE:
             self._drag_offset = pos - self._content.topLeft()
             return
         if self._text_editing:
@@ -999,7 +1000,7 @@ class SnipperWindow(QWidget):
             self.setCursor(Qt.SizeHorCursor)
         elif corner in ("t", "b"):
             self.setCursor(Qt.SizeVerCursor)
-        elif self._content.contains(pos) and not (self._pinned or self._tool == TOOL_MOVE):
+        elif self._content.contains(pos) and self._tool != TOOL_MOVE:
             self.setCursor(Qt.CrossCursor)
         else:
             self.setCursor(Qt.ArrowCursor)
@@ -1305,10 +1306,6 @@ class SnipperWindow(QWidget):
     def _on_escape(self):
         if self._text_editing:
             self._cancel_text()
-        elif self._drawing:
-            self._dismiss()
-        elif self._pinned:
-            self.toggle_pin()
         else:
             self._dismiss()
 
