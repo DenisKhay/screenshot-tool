@@ -11,7 +11,7 @@ press the capture button.**
    First run, or a saved rect that no longer fits the desktop: crosshair, pull the
    rectangle from nothing.
 2. Move it by the body (Move tool / default), resize by corner grips, expand to
-   fullscreen with `⛶`.
+   fullscreen with `⛶`. Arrow keys nudge it by 1 px.
 3. Annotate: Pen, Arrow, Box, Text; color + stroke-width cycle; `↶` undo.
 4. Capture with the green **camera** button or **Ctrl+C** (end of the toolbar,
    side configurable):
@@ -20,10 +20,11 @@ press the capture button.**
    - the transparent background becomes the captured image.
 5. Mousedown on the camera button = capture; **keep holding** and you drag the
    captured shot around; body-drag is enabled automatically (Move).
-6. Post-capture: **opacity slider**, **Pin** (borderless always-on-top), history
-   `◀ n/m ▶` — historical shots can be re-copied to the clipboard with **Copy**
-   (never automatic). Size label shows the real pixel size. **Reset** clears
-   drawings and returns the frame to its default size.
+6. Post-capture: **opacity slider**, **Pin** (keeps the shot above everything;
+   unpin lets other windows cover it, clicking the shot raises it), history
+   `◀ n/m ▶` (`Shift+←`/`Shift+→`) — historical shots can be re-copied to the
+   clipboard with **Copy** (never automatic). Size label shows the real pixel
+   size. **Reset** clears drawings and returns the frame to its default size.
 7. `✕` / `Esc` hides the frame; the app stays resident so the hotkey is instant.
    Fully quit with `./shot quit`.
 

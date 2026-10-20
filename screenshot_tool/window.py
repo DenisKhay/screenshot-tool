@@ -406,13 +406,17 @@ class SnipperWindow(QWidget):
 
         QShortcut(QKeySequence(Qt.Key_Escape), self, self._on_escape)
         self._sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self.undo)
-        self._sc_prev = QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.hist_step(-1))
-        self._sc_next = QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.hist_step(1))
+        self._sc_prev = QShortcut(QKeySequence("Shift+Left"), self, lambda: self.hist_step(-1))
+        self._sc_next = QShortcut(QKeySequence("Shift+Right"), self, lambda: self.hist_step(1))
         self._sc_capture = QShortcut(QKeySequence("Ctrl+C"), self, self._capture_shortcut)
         self._typing_shortcuts = [self._sc_undo, self._sc_prev, self._sc_next]
         for key, t in (("m", TOOL_MOVE), ("p", TOOL_PEN), ("a", TOOL_ARROW),
                        ("r", TOOL_RECT), ("f", TOOL_FILL), ("t", TOOL_TEXT)):
             sc = QShortcut(QKeySequence(key), self, lambda t=t: self.set_tool(t))
+            self._typing_shortcuts.append(sc)
+        for key, d in ((Qt.Key_Left, (-1, 0)), (Qt.Key_Right, (1, 0)),
+                       (Qt.Key_Up, (0, -1)), (Qt.Key_Down, (0, 1))):
+            sc = QShortcut(QKeySequence(key), self, lambda d=d: self.nudge(*d))
             self._typing_shortcuts.append(sc)
 
         self._ant_timer.start()
@@ -682,6 +686,29 @@ class SnipperWindow(QWidget):
         self._place_size_label()
         self._update_mask()
         self.update(dirty.united(QRegion(self._content.adjusted(-m, -m, m, m))))
+
+    def nudge(self, dx: int, dy: int):
+        """Arrow keys: move the frame by single pixels. In the compact
+        (sticker) mode the shot is glued to the window, so the window moves."""
+        if self._drawing and self._draw_start is not None:
+            return
+        if self._drag_offset is not None or self._resize_corner is not None:
+            return
+        if self._window_covers_desktop():
+            tl = self._content.topLeft() + QPoint(dx, dy)
+            tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
+            tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+            self._move_content_to(tl)
+        else:
+            vg = QGuiApplication.primaryScreen().virtualGeometry()
+            gtl = (self.geometry().topLeft() + self._content.topLeft()
+                   + QPoint(dx, dy))
+            gtl.setX(max(vg.x(), min(gtl.x(),
+                     vg.x() + self._desktop.width() - self._content.width())))
+            gtl.setY(max(vg.y(), min(gtl.y(),
+                     vg.y() + self._desktop.height() - self._content.height())))
+            self.move(gtl - self._content.topLeft())
+            self.update()
 
     def _ant_step(self):
         # animate only while selecting; a captured shot freezes the border
