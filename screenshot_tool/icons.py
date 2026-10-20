@@ -1,4 +1,6 @@
 """Programmatically authored SVG icons rendered to QIcons."""
+from pathlib import Path
+
 from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -74,3 +76,14 @@ def color_dot_icon(color: str, size: int = 36) -> QIcon:
     p.end()
     pm.setDevicePixelRatio(2.0)
     return QIcon(pm)
+
+
+def app_icon() -> QIcon:
+    """Taskbar/window icon: the repo SVG when running from the checkout,
+    else the copy install.sh drops into the user's hicolor icons."""
+    here = Path(__file__).resolve().parent.parent / "screenshot-tool.svg"
+    installed = Path.home() / ".local/share/icons/hicolor/scalable/apps/screenshot-tool.svg"
+    for p in (here, installed):
+        if p.exists():
+            return QIcon(str(p))
+    return QIcon()

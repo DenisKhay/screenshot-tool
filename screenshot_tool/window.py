@@ -353,9 +353,12 @@ class SnipperWindow(QWidget):
         # monitor's workarea (uneven dual-monitor layout), which used to cut
         # the overlay down to 4440x1048+40+392 and left the top of the screen
         # unreachable. Override-redirect honors setGeometry 1:1; stacking and
-        # input shaping are done manually via X calls below.
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool |
+        # input shaping are done manually via X calls below. Qt.Window (not
+        # Tool): Tool marks the window SKIP_TASKBAR, which would keep the
+        # captured sticker out of the taskbar/dock entirely.
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window |
                             Qt.X11BypassWindowManagerHint)
+        self.setWindowIcon(icons.app_icon())
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         # the override-redirect window is never "active" in Qt's eyes and
         # tooltips are suppressed for inactive windows without this

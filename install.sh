@@ -21,9 +21,9 @@ echo "==> desktop file + icon"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
 mkdir -p "$APPS" "$ICONS"
-cat > "$ICONS/screenshot-tool.svg" <<'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#263238"/><rect x="10" y="22" width="44" height="28" rx="5" fill="#00bcd4"/><rect x="24" y="14" width="16" height="10" rx="3" fill="#00bcd4"/><circle cx="32" cy="36" r="9" fill="#263238"/><circle cx="32" cy="36" r="6" fill="#eceff1"/></svg>
-EOF
+cp "$DIR/screenshot-tool.svg" "$ICONS/screenshot-tool.svg"
+command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+  gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 cat > "$APPS/screenshot-tool.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -31,6 +31,7 @@ Name=Screenshot Tool
 Comment=Flameshot-style region cropper (transparent frame -> annotate -> capture)
 Exec=$DIR/shot --toggle
 Icon=screenshot-tool
+StartupWMClass=screenshot-tool
 Terminal=false
 Categories=Utility;Graphics;
 EOF
