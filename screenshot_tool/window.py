@@ -1838,6 +1838,12 @@ class SnipperWindow(QWidget):
             self._dismiss()  # remember the frame for the next invocation
         elif cmd == "capture":
             self.do_capture()
+        elif cmd == "capture-tray":
+            # tray menu: open the frame if hidden, then shoot (CLI "capture"
+            # semantics without the fixed 5s app lifetime)
+            if not self.isVisible():
+                self.open_at_cursor()
+            QTimer.singleShot(1200, self.do_capture)
         elif cmd == "debug":
             log.info("state: tool=%s editing=%s content=%s window=%s editor=%s width=%s text_size=%s shapes=%d",
                      self._tool, self._text_editing, self._content, self.geometry(),

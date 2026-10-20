@@ -9,13 +9,35 @@ import threading
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from .icons import app_icon
 from .ipc import send_command, serve
 from .settings import Settings
 from .window import SnipperWindow
 
 REMOTE_ONLY = {"quit", "status"}
+
+
+def build_tray(win: SnipperWindow) -> QSystemTrayIcon:
+    """Resident StatusNotifier tray icon (AppIndicator): the app's taskbar
+    presence while nothing is on screen. Left click toggles the frame."""
+    tray = QSystemTrayIcon(app_icon(), win)
+    menu = QMenu()
+    act_toggle = menu.addAction("Show / hide frame")
+    act_capture = menu.addAction("Capture")
+    menu.addSeparator()
+    act_quit = menu.addAction("Quit")
+    act_toggle.triggered.connect(lambda: win.ipc_command.emit("toggle"))
+    act_capture.triggered.connect(lambda: win.ipc_command.emit("capture-tray"))
+    act_quit.triggered.connect(lambda: win.ipc_command.emit("quit"))
+    tray.setContextMenu(menu)
+    tray.setToolTip("Screenshot Tool")
+    tray.activated.connect(
+        lambda reason: win.ipc_command.emit("toggle")
+        if reason == QSystemTrayIcon.Trigger else None)
+    tray.show()
+    return tray
 
 
 def main() -> int:
@@ -49,11 +71,15 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("screenshot-tool")
+    app.setApplicationDisplayName("Screenshot Tool")
+    app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     settings = Settings()
     win = SnipperWindow(settings)
+
+    tray = build_tray(win)  # noqa: F841 — kept alive for the app's lifetime
 
     threading.Thread(target=serve, args=(lambda c: win.ipc_command.emit(c),), daemon=True).start()
     if cmd in ("toggle", "show"):
