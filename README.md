@@ -6,8 +6,10 @@ press the capture button.**
 
 ## Flow
 
-1. `Super+Alt+A` (hotkey) or `./shot` — a transparent frame with 4 corner grips
-   appears at the cursor. Nothing is captured yet.
+1. `Super+Alt+A` (hotkey) or `./shot` — the previous frame reappears exactly where
+   you left it (position + size, remembered across restarts). Nothing is captured yet.
+   First run, or a saved rect that no longer fits the desktop: crosshair, pull the
+   rectangle from nothing.
 2. Move it by the body (Move tool / default), resize by corner grips, expand to
    fullscreen with `⛶`.
 3. Annotate: Pen, Arrow, Box, Text; color + stroke-width cycle; `↶` undo.
@@ -43,6 +45,7 @@ press the capture button.**
 | `filename_pattern` | `shot_%Y%m%d_%H%M%S` | strftime pattern |
 | `format` | `png` | output format |
 | `history_limit` | `20` | in-session history size |
+| `last_frame` | — | last frame rect `[x, y, w, h]`, managed by the app (restore source) |
 
 ## How capture works on this machine (GNOME 46 / Wayland)
 

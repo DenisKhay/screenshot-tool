@@ -154,6 +154,8 @@ def _xsetup():
         fn(_xlib, "XLowerWindow", None, [ctypes.c_void_p, ctypes.c_ulong])
         fn(_xlib, "XRaiseWindow", None, [ctypes.c_void_p, ctypes.c_ulong])
         _shape_dpy = _xlib.XOpenDisplay(None)
+        if not _shape_dpy:
+            raise OSError("no X display")
         global _ignore_xerr
         _ignore_xerr = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(
             lambda *_: 0)
@@ -716,11 +718,71 @@ class SnipperWindow(QWidget):
             lbl.width(), lbl.height())
 
     def open_at_cursor(self):
+        if self._open_last_frame():
+            return
         self.open_draw()
+
+    def _remember_frame(self, rect: QRect):
+        """Keep the frame rect for the next invocation: in memory and in
+        settings.json, so it survives restarts/reboots too."""
+        self._last_rect = QRect(rect)
+        try:
+            self.settings["last_frame"] = [rect.x(), rect.y(), rect.width(), rect.height()]
+            self.settings.save()
+        except (OSError, ValueError):
+            pass
+
+    def _open_last_frame(self) -> bool:
+        """Invocation restore: reopen the previous frame ready to adjust and
+        annotate. False = nothing valid to restore (first run, or the saved
+        rect no longer fits the current desktop) — caller falls back to
+        drawing a new one."""
+        if (self.isVisible() and not self._drawing and self._image is None
+                and not self._content.isNull() and self._content.width() > 0):
+            # already showing a live frame: keep it exactly where it is
+            self.raise_()
+            self.activateWindow()
+            self._pulse_border()
+            return True
+        rect = self._last_rect
+        if rect is None:
+            saved = self.settings.get("last_frame")
+            if isinstance(saved, (list, tuple)) and len(saved) == 4:
+                try:
+                    rect = QRect(*(int(v) for v in saved))
+                except (TypeError, ValueError):
+                    rect = None
+        if rect is None or rect.isNull() or rect.width() < MIN_W or rect.height() < MIN_H:
+            return False
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        desktop = QRect(QPoint(0, 0), QSize(vg.width(), vg.height()))
+        rect = rect.intersected(desktop)
+        if rect.isNull() or rect.width() < MIN_W or rect.height() < MIN_H:
+            return False
+
+        self._enter_overlay_mode()
+        self._end_session()
+        self._desktop = desktop
+        self._drawing = False
+        self._draw_start = None
+        self._fullscreen = False
+        self._content = QRect(rect)
+        self.unsetCursor()
+        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
+        self.set_tool(TOOL_MOVE)
+        self.relayout()
+        self._refresh_size_label()
+        self._update_ui_state()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._update_mask()
+        self._pulse_border()
+        return True
 
     def _enter_draw_mode(self):
         if self._content is not None and not self._content.isNull() and self._content.width() > 0:
-            self._last_rect = QRect(self._content)
+            self._remember_frame(self._content)
         self._drawing = True
         self._draw_start = None
         self._pre_draw_content = None
@@ -1564,6 +1626,8 @@ class SnipperWindow(QWidget):
     def _capture_impl(self):
         if self._drag_timer is not None and self._drag_timer.isActive():
             self._drag_timer.stop()
+        if not self._content.isNull() and self._content.width() > 0:
+            self._remember_frame(self._content)  # capture site = next invocation's frame
         self.hide()
         QApplication.processEvents()
         time.sleep(0.15)
@@ -1716,7 +1780,7 @@ class SnipperWindow(QWidget):
     def _dismiss(self):
         """Esc / ✕: hide. History is kept until cleared with the trash button."""
         if not self._content.isNull() and self._content.width() > 0:
-            self._last_rect = QRect(self._content)
+            self._remember_frame(self._content)
         self.hide()
 
     def _on_escape(self):
@@ -1741,7 +1805,7 @@ class SnipperWindow(QWidget):
             xs, ys = cmd.split(":", 1)[1].split(",")
             self.open_at(int(xs), int(ys))
         elif cmd == "hide":
-            self.hide()
+            self._dismiss()  # remember the frame for the next invocation
         elif cmd == "capture":
             self.do_capture()
         elif cmd == "debug":

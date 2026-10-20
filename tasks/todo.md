@@ -108,6 +108,17 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       bottom = tools incl. text-size | color/width | undo.
 - [x] Capture button (corner configurable): press = save to folder + clipboard
 - [x] Post-capture: opacity slider, pin, history ◀ ▶ + copy, size label, reset (real px)
+- [x] Invocation restores the previous frame: `_last_rect` was written on
+      dismiss/draw-enter but never read — every invoke went straight to draw
+      mode. open_at_cursor now reopens the last frame ready to adjust (no-op
+      when a live frame is already shown; falls back to draw mode on first
+      run, corrupt value, or a rect that no longer fits the desktop). The rect
+      persists as `last_frame` in settings.json — survives restarts/reboots —
+      and is remembered on Esc/✕, `shot hide`, entering draw mode, and
+      capture. Also: _xsetup raised its no-display check after XFlush(NULL) —
+      any headless run SIGSEGV'd; check moved up. Offscreen test (7 checks,
+      XDG_CONFIG_HOME-sandboxed) + live journal verify (cold-start content
+      rect == persisted rect) both pass.
 - [x] install.sh: venv+PySide6+jeepney, desktop entry + icon, grant, hotkey merge
 - [x] Self-test end-to-end
 
