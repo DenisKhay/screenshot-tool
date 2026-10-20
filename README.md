@@ -12,6 +12,7 @@ press the capture button.**
    rectangle from nothing.
 2. Move it by the body (Move tool / default), resize by corner grips, expand to
    fullscreen with `⛶`. Arrow keys nudge it by 1 px.
+   Capture history is on `Shift+←`/`Shift+→` (also the `◀ n/m ▶` buttons).
 3. Annotate: Pen, Arrow, Box, Text; color + stroke-width cycle; `↶` undo.
 4. Capture with the green **camera** button or **Ctrl+C** (end of the toolbar,
    side configurable):
