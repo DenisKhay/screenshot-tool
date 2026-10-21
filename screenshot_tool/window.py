@@ -53,6 +53,7 @@ BTN = 30    # icon button size
 GRIP = 10   # corner grip hit radius
 EDGE_ZONE = 8  # edge grab zone (pre-capture only)
 MIN_W, MIN_H = 240, 160
+EDGE_MARGIN = 48  # min frame strip kept on-desktop when it crosses an edge
 
 TOOL_MOVE, TOOL_PEN, TOOL_ARROW, TOOL_RECT, TOOL_FILL, TOOL_TEXT = range(6)
 TOOL_NAMES = ["move", "pen", "arrow", "rect", "fillrect", "text"]
@@ -403,6 +404,7 @@ class SnipperWindow(QWidget):
         self._drag_offset_global = None
         self._resize_corner = None
         self._resize_ref = None
+        self._resize_ref_global = None
         self._text_editing = False
         self._border_alpha = 255
         self._drag_timer = None
@@ -686,6 +688,25 @@ class SnipperWindow(QWidget):
         return (self.width() >= self._desktop.width() and
                 self.height() >= self._desktop.height())
 
+    def _clamp_frame_tl(self, tl: QPoint) -> QPoint:
+        """The frame may cross desktop edges — only a grabbable strip
+        (EDGE_MARGIN px) must stay on-desktop, so it can always be
+        dragged back."""
+        m = EDGE_MARGIN
+        x = max(m - self._content.width(), min(tl.x(), self._desktop.width() - m))
+        y = max(m - self._content.height(), min(tl.y(), self._desktop.height() - m))
+        return QPoint(x, y)
+
+    def _clamp_sticker_tl(self, gtl: QPoint) -> QPoint:
+        """Same edge policy for the sticker window, in global coordinates."""
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        m = EDGE_MARGIN
+        x = max(vg.x() + m - self._content.width(),
+                min(gtl.x(), vg.x() + self._desktop.width() - m))
+        y = max(vg.y() + m - self._content.height(),
+                min(gtl.y(), vg.y() + self._desktop.height() - m))
+        return QPoint(x, y)
+
     def _move_content_to(self, tl: QPoint):
         """Drag primitive (full-desktop overlay): move only the content rect,
         repaint only the band it left/entered. Moving the window too doubled
@@ -737,18 +758,11 @@ class SnipperWindow(QWidget):
         if self._drag_offset is not None or self._resize_corner is not None:
             return
         if self._window_covers_desktop():
-            tl = self._content.topLeft() + QPoint(dx, dy)
-            tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
-            tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+            tl = self._clamp_frame_tl(self._content.topLeft() + QPoint(dx, dy))
             self._move_content_to(tl)
         else:
-            vg = QGuiApplication.primaryScreen().virtualGeometry()
-            gtl = (self.geometry().topLeft() + self._content.topLeft()
-                   + QPoint(dx, dy))
-            gtl.setX(max(vg.x(), min(gtl.x(),
-                     vg.x() + self._desktop.width() - self._content.width())))
-            gtl.setY(max(vg.y(), min(gtl.y(),
-                     vg.y() + self._desktop.height() - self._content.height())))
+            gtl = self._clamp_sticker_tl(
+                self.geometry().topLeft() + self._content.topLeft() + QPoint(dx, dy))
             self.move(gtl - self._content.topLeft())
             self.update()
 
@@ -1215,15 +1229,21 @@ class SnipperWindow(QWidget):
     def toggle_pin(self):
         self._pinned = not self._pinned
         self.btn_pin.setChecked(self._pinned)
-        self._apply_pin()
+        if self._image is not None:
+            # a captured shot exists: pin state picks the window mode
+            # (drawing state just remembers the intent until capture)
+            self._apply_pin()
+            self.claim_focus()
 
     def _apply_pin(self):
-        """Pin = _NET_WM_STATE_ABOVE on the managed sticker: mutter enforces
-        the above layer (kept above newly focused windows). Unpinned: normal
-        stacking — other windows cover the shot. Pure state flip: no
-        geometry, no recreation, no jump."""
-        if not self._bypass:
-            set_above_state(self, self._pinned)
+        """Pinned: managed hug sticker with _NET_WM_STATE_ABOVE — mutter
+        keeps it above everything but clamps it on-screen. Unpinned: OR
+        full-desktop overlay — mutter ignores OR windows entirely, so the
+        shot may hang off the screen edges and normal windows cover it."""
+        if self._pinned:
+            self._enter_sticker_mode()
+        else:
+            self._enter_overlay_mode()
 
     def _sticker_want(self, cg=None):
         """Geometry of the managed sticker window: the shot plus room for the
@@ -1459,6 +1479,7 @@ class SnipperWindow(QWidget):
         if corner:
             self._resize_corner = corner
             self._resize_ref = QRect(self._content)
+            self._resize_ref_global = self.content_global_rect()
             return
         if not self._content.isNull() and not self._content.contains(pos):
             # other tools: dragging on empty space still draws a fresh rectangle
@@ -1493,7 +1514,7 @@ class SnipperWindow(QWidget):
         gpos = e.globalPosition().toPoint()
 
         if self._resize_corner and self._resize_ref:
-            self._do_resize(pos)
+            self._do_resize(gpos)
             return
         if self._drawing:
             if self._draw_start is not None:
@@ -1504,19 +1525,12 @@ class SnipperWindow(QWidget):
             return
         if self._drag_offset is not None:
             if self._window_covers_desktop():
-                tl = pos - self._drag_offset
-                tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
-                tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+                tl = self._clamp_frame_tl(pos - self._drag_offset)
                 self._move_content_to(tl)
             else:
                 # compact (hugged) window: the shot is glued to the window,
                 # so move the window 1:1 and keep the content fixed inside it
-                vg = QGuiApplication.primaryScreen().virtualGeometry()
-                gtl = gpos - self._drag_offset_global
-                gtl.setX(max(vg.x(), min(gtl.x(),
-                         vg.x() + self._desktop.width() - self._content.width())))
-                gtl.setY(max(vg.y(), min(gtl.y(),
-                         vg.y() + self._desktop.height() - self._content.height())))
+                gtl = self._clamp_sticker_tl(gpos - self._drag_offset_global)
                 self.move(gtl - self._content.topLeft())
                 self.update()
             return
@@ -1550,6 +1564,7 @@ class SnipperWindow(QWidget):
         if self._resize_corner:
             self._resize_corner = None
             self._resize_ref = None
+            self._resize_ref_global = None
             self.relayout()
         if self._drag_offset is not None:
             self._drag_offset = None
@@ -1576,16 +1591,18 @@ class SnipperWindow(QWidget):
                 self.btn_undo.setEnabled(True)
             self.update()
 
-    def _do_resize(self, lpos: QPoint):
+    def _do_resize(self, gpos: QPoint):
         """Aspect-locked resize (with an image) anchored at the opposite corner.
-        Edge drags (no image yet) move only their own axis. Pure content-rect
-        math inside the fixed overlay window."""
-        cg0 = self._resize_ref
+        Edge drags (no image yet) move only their own axis. All math in GLOBAL
+        coordinates: in sticker mode every step re-hugs (moves) the window, so
+        window-relative mouse positions would chase their own tail."""
+        vg = QGuiApplication.primaryScreen().virtualGeometry()
+        cg0 = self._resize_ref_global
         corner = self._resize_corner
         horiz = "l" in corner or "r" in corner
         vert = "t" in corner or "b" in corner
-        lo_x, hi_x = PAD, self._desktop.width() - PAD
-        lo_y, hi_y = PAD, self._desktop.height() - PAD
+        lo_x, hi_x = vg.x() + PAD, vg.x() + self._desktop.width() - PAD
+        lo_y, hi_y = vg.y() + PAD, vg.y() + self._desktop.height() - PAD
         aspect = (self._image.width() / max(1, self._image.height())) if self._image is not None else None
         ax = cg0.right() if "l" in corner else cg0.left()
         ay = cg0.bottom() if "t" in corner else cg0.top()
@@ -1593,7 +1610,7 @@ class SnipperWindow(QWidget):
         if not horiz:
             cgx, cw = cg0.left(), cg0.width()
         else:
-            cw = max(MIN_W, abs(lpos.x() - ax))
+            cw = max(MIN_W, abs(gpos.x() - ax))
             if "l" in corner:
                 cgx = max(lo_x, ax - cw)
                 cw = max(MIN_W, ax - cgx)
@@ -1607,7 +1624,7 @@ class SnipperWindow(QWidget):
             if aspect is not None and horiz:
                 ch = max(MIN_H, round(cw / aspect))
             else:
-                ch = max(MIN_H, abs(lpos.y() - ay))
+                ch = max(MIN_H, abs(gpos.y() - ay))
             if "t" in corner:
                 cgy = max(lo_y, ay - ch)
                 ch = max(MIN_H, ay - cgy)
@@ -1620,6 +1637,22 @@ class SnipperWindow(QWidget):
             cw = max(MIN_W, round(ch * aspect))
             if "l" in corner:
                 cgx = ax - cw
+
+        if not self._bypass:
+            # sticker mode: the content is glued at its fixed offset inside
+            # the hug window, so a resize is a pure window-geometry operation
+            # (re-deriving the window from content_global_rect would move the
+            # content a second time — the old left/top corner bug)
+            self._content.setSize(QSize(cw, ch))
+            m_t = TB_H + GAP + PAD
+            self._set_geometry_keep(QRect(
+                QPoint(cgx - PAD, cgy - m_t),
+                QSize(cw + PAD + m_t, ch + 2 * m_t)))
+            self._place_bars()
+            self._place_size_label()
+            self._update_mask()
+            self.update()
+            return
 
         self._content = QRect(QPoint(cgx, cgy), QSize(cw, ch))
         self.relayout()
@@ -1796,12 +1829,11 @@ class SnipperWindow(QWidget):
             if d.isNull():
                 return
             if self._window_covers_desktop():
-                tl = self._content.topLeft() + d
-                tl.setX(max(0, min(tl.x(), self._desktop.width() - self._content.width())))
-                tl.setY(max(0, min(tl.y(), self._desktop.height() - self._content.height())))
+                tl = self._clamp_frame_tl(self._content.topLeft() + d)
                 self._move_content_to(tl)
             else:
-                self.move(self.pos() + d)
+                gtl = self._clamp_sticker_tl(self.pos() + self._content.topLeft() + d)
+                self.move(gtl - self._content.topLeft())
                 self.update()
             last = pos
 
