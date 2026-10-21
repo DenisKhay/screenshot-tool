@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QSlider,
+    QSpinBox,
     QStyle,
     QToolButton,
     QVBoxLayout,
@@ -307,6 +308,52 @@ class JumpSlider(QSlider):
         super().mousePressEvent(e)
 
 
+class ScrubSpinBox(QSpinBox):
+    """Number field whose value can also be scrubbed by dragging the text
+    area horizontally (1 px = 1 unit). A click without movement falls
+    through to normal caret placement for typing."""
+
+    def __init__(self, lo: int, hi: int, val: int, suffix: str,
+                 on_change, parent):
+        super().__init__(parent)
+        self.setRange(lo, hi)
+        self.setValue(val)
+        self.setSuffix(suffix)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedWidth(64)
+        self.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.setKeyboardTracking(False)
+        self.setAccelerated(True)
+        self.lineEdit().setCursor(Qt.CursorShape.SizeHorCursor)
+        self.lineEdit().installEventFilter(self)
+        self.valueChanged.connect(on_change)
+        self._scrub_x = None
+        self._scrub_val = None
+
+    def eventFilter(self, obj, ev):
+        if obj is self.lineEdit():
+            t = ev.type()
+            if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.LeftButton:
+                self._scrub_x = ev.globalPosition().toPoint().x()
+                self._scrub_val = self.value()
+                self.lineEdit().deselect()
+                return True
+            if t == QEvent.Type.MouseMove and self._scrub_x is not None:
+                dx = ev.globalPosition().toPoint().x() - self._scrub_x
+                self.setValue(self._scrub_val + dx)
+                return True
+            if t == QEvent.Type.MouseButtonRelease and self._scrub_x is not None:
+                moved = abs(ev.globalPosition().toPoint().x() - self._scrub_x)
+                self._scrub_x = None
+                if moved <= 2:
+                    # plain click: hand the caret back for typing
+                    self.lineEdit().setFocus()
+                    self.lineEdit().selectAll()
+                    return False
+                return True
+        return super().eventFilter(obj, ev)
+
+
 class TextEditor(QLineEdit):
     """Text tool editor: plain click edits the caret, drag moves the box."""
 
@@ -381,6 +428,7 @@ class SnipperWindow(QWidget):
         self._fullscreen = False
         self._pre_fs = None
         self._pinned = False
+        self._tools_hidden = False
         self._busy = False
         self._bypass = True  # OR full-desktop overlay vs managed sticker
         self._sticker_want_rect = None
@@ -538,14 +586,10 @@ class SnipperWindow(QWidget):
         self.btn_pin.setChecked(False)
         lay_t.addWidget(self.btn_pin, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.opacity_slider = QSlider(Qt.Horizontal, self.bar_top)
-        self.opacity_slider.setRange(20, 100)
-        self.opacity_slider.setValue(int(self._opacity * 100))
-        self.opacity_slider.setFixedWidth(64)
-        self.opacity_slider.setToolTip("Image opacity")
-        self.opacity_slider.setCursor(Qt.PointingHandCursor)
-        self.opacity_slider.valueChanged.connect(self._on_opacity)
-        lay_t.addWidget(self.opacity_slider, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.opacity_spin = ScrubSpinBox(
+            20, 100, int(self._opacity * 100), "%", self._on_opacity, self.bar_top)
+        self.opacity_spin.setToolTip("Image opacity — drag sideways or type")
+        lay_t.addWidget(self.opacity_spin, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(mksep(self.bar_top))
 
         self.btn_prev = mkbtn(self.bar_top, "prev", "Previous capture (←)", lambda: self.hist_step(-1))
@@ -568,6 +612,16 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_settings, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_close = mkbtn(self.bar_top, "close", "Hide (Esc)", self._dismiss)
         lay_t.addWidget(self.btn_close, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.btn_collapse = mkbtn(self.bar_top, "tools", "Hide toolbars", self.toggle_tools)
+        lay_t.addWidget(self.btn_collapse, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.btn_expand = QToolButton(self)
+        self.btn_expand.setStyleSheet(BTN_CSS)
+        self.btn_expand.setIcon(icons.svg_icon("tools"))
+        self.btn_expand.setFixedSize(22, 22)
+        self.btn_expand.setToolTip("Show toolbars")
+        self.btn_expand.setCursor(Qt.PointingHandCursor)
+        self.btn_expand.clicked.connect(self.toggle_tools)
+        self.btn_expand.hide()
 
         self.size_label = QLabel(self)
         self.size_label.setStyleSheet(LABEL_CSS)
@@ -645,8 +699,12 @@ class SnipperWindow(QWidget):
             self.update()
             return
 
-        for bar in (self.bar_bottom, self.bar_top, self.bar_right):
-            bar.show()
+        if self._tools_hidden:
+            for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+                bar.hide()
+        else:
+            for bar in (self.bar_bottom, self.bar_top, self.bar_right):
+                bar.show()
 
         self._place_bars()
         self._place_size_label()
@@ -686,6 +744,12 @@ class SnipperWindow(QWidget):
         if rx + rb.width() > d_w:
             rx = self._content.right() - rb.width() - 4
         self.bar_right.setGeometry(rx, ry, rb.width(), rb.height())
+
+        if self._tools_hidden:
+            # the only remaining control: small button at the frame's
+            # top-right corner, just above the frame edge
+            self.btn_expand.move(self._content.right() - self.btn_expand.width(),
+                                 self._content.top() - self.btn_expand.height() - 6)
 
     def _window_covers_desktop(self):
         return (self.width() >= self._desktop.width() and
@@ -786,6 +850,8 @@ class SnipperWindow(QWidget):
         region = QRegion(self._content.adjusted(-8, -8, 8, 8))
         for bar in (self.bar_bottom, self.bar_top, self.bar_right):
             region = region.united(QRegion(bar.geometry()))
+        if self._tools_hidden and self.btn_expand.isVisible():
+            region = region.united(QRegion(self.btn_expand.geometry()))
         if self.size_label.isVisible():
             region = region.united(QRegion(self.size_label.geometry()))
         if self._width_panel.isVisible():
@@ -869,6 +935,8 @@ class SnipperWindow(QWidget):
     def _enter_draw_mode(self):
         if self._content is not None and not self._content.isNull() and self._content.width() > 0:
             self._remember_frame(self._content)
+        if self._tools_hidden:
+            self.toggle_tools()  # drawing needs the tool buttons
         self._drawing = True
         self._draw_start = None
         self._pre_draw_content = None
@@ -1229,6 +1297,22 @@ class SnipperWindow(QWidget):
         self._opacity = v / 100
         self.update()
 
+    def toggle_tools(self):
+        self._tools_hidden = not self._tools_hidden
+        self._apply_tools_visibility()
+
+    def _apply_tools_visibility(self):
+        """Compact mode: every bar collapses into one small tools button at
+        the frame's top-right corner."""
+        hidden = self._tools_hidden
+        for bar in (self.bar_top, self.bar_bottom, self.bar_right):
+            bar.setVisible(not hidden)
+        self._width_panel.hide()
+        self._textsize_panel.hide()
+        self.btn_collapse.setVisible(not hidden)
+        self.btn_expand.setVisible(hidden)
+        self.relayout()
+
     def toggle_pin(self):
         self._pinned = not self._pinned
         self.btn_pin.setChecked(self._pinned)
@@ -1331,7 +1415,7 @@ class SnipperWindow(QWidget):
         self.btn_undo.setEnabled(bool(self._shapes) or bool(self._imprints()))
 
         self.btn_copy.setEnabled(has_img)
-        self.opacity_slider.setEnabled(has_img)
+        self.opacity_spin.setEnabled(has_img)
         self.btn_11.setEnabled(has_img)
         self.btn_bake.setEnabled(has_img)
         self.btn_delone.setEnabled(bool(self.history) and has_img)
@@ -1341,7 +1425,7 @@ class SnipperWindow(QWidget):
         self.hist_label.setText(f"{self._hist_idx + 1}/{len(self.history)}")
 
         if has_img:
-            self.opacity_slider.setValue(int(self._opacity * 100))
+            self.opacity_spin.setValue(int(self._opacity * 100))
 
     # ---------- painting ----------
 

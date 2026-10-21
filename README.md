@@ -21,13 +21,17 @@ press the capture button.**
    - the transparent background becomes the captured image.
 5. Mousedown on the camera button = capture; **keep holding** and you drag the
    captured shot around; body-drag is enabled automatically (Move).
-6. Post-capture: **opacity slider**, **Pin** — captures start *unpinned*: the
+6. Post-capture: **opacity** number field (drag it sideways to scrub, click
+   to type), **Pin** — captures start *unpinned*: the
    shot may hang off the screen edges and other windows cover it. Pinning
    keeps it above everything instead (a pinned shot stays on-screen — that is
    the window manager's rule, not a choice). History `◀ n/m ▶`
    (`Shift+←`/`Shift+→`) — historical shots can be re-copied to the
    clipboard with **Copy** (never automatic). Size label shows the real pixel
    size. **Reset** clears drawings and returns the frame to its default size.
+   The `⦚` tools button in the top bar collapses all toolbars into one small
+   button at the frame's top-right corner; clicking it brings them back
+   (drawing always expands them).
 7. `✕` / `Esc` hides the frame; the app stays resident so the hotkey is instant.
    Fully quit with `./shot quit`.
 

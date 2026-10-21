@@ -27,6 +27,10 @@ ICONS = {
             'fill="{c}" stroke="none"/>'),
     "opacity": ('<circle cx="10" cy="10" r="7"/>'
                 '<path d="M10 3a7 7 0 0 1 0 14z" fill="{c}" stroke="none"/>'),
+    "tools": ('<path d="M4 6h12M4 10h12M4 14h12"/>'
+              '<circle cx="8" cy="6" r="1.8" fill="{c}" stroke="none"/>'
+              '<circle cx="13" cy="10" r="1.8" fill="{c}" stroke="none"/>'
+              '<circle cx="6" cy="14" r="1.8" fill="{c}" stroke="none"/>'),
     "prev": '<path d="M12 4l-6 6 6 6"/>',
     "next": '<path d="M8 4l6 6-6 6"/>',
     "close": '<path d="M5 5l10 10M15 5L5 15"/>',
