@@ -1,5 +1,6 @@
 import ctypes
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -153,6 +154,10 @@ def _xsetup():
             ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_int])
         fn(_xlib, "XLowerWindow", None, [ctypes.c_void_p, ctypes.c_ulong])
         fn(_xlib, "XRaiseWindow", None, [ctypes.c_void_p, ctypes.c_ulong])
+        fn(_xlib, "XSetInputFocus", ctypes.c_int,
+           [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong])
+        fn(_xlib, "XGetInputFocus", ctypes.c_int,
+           [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int)])
         _shape_dpy = _xlib.XOpenDisplay(None)
         if not _shape_dpy:
             raise OSError("no X display")
@@ -345,6 +350,7 @@ class TextEditor(QLineEdit):
 
 class SnipperWindow(QWidget):
     ipc_command = Signal(str)
+    capture_result = Signal(object, str, int)  # image|None, path/error, generation
 
     def __init__(self, settings: Settings):
         super().__init__(None)
@@ -425,6 +431,8 @@ class SnipperWindow(QWidget):
         self._ant_timer.start()
 
         self.ipc_command.connect(self._on_ipc)
+        self.capture_result.connect(self._capture_continuation)
+        self._session_gen = 0  # bumped on session (re)open; stale captures drop
 
     # ---------- UI construction ----------
 
@@ -690,6 +698,37 @@ class SnipperWindow(QWidget):
         self._update_mask()
         self.update(dirty.united(QRegion(self._content.adjusted(-m, -m, m, m))))
 
+    def claim_focus(self):
+        """Keyboard focus after a summon or window-flag switch. The OR overlay
+        needs a direct XSetInputFocus (mutter does not manage OR windows); the
+        managed sticker goes through activateWindow and re-asserts once — the
+        native window is recreated on flag switches and mutter's focus can
+        lose the race against the async map, which used to eat Ctrl+C."""
+        if self._bypass:
+            try:
+                xlib, _, dpy = _xsetup()
+                xlib.XSetInputFocus(dpy, int(self.winId()), 1, 0)  # RevertToPointerRoot, CurrentTime
+                xlib.XFlush(dpy)
+            except Exception:
+                log.exception("X focus failed")
+        else:
+            self.activateWindow()
+            QTimer.singleShot(200, self._refocus_if_lost)
+
+    def _refocus_if_lost(self):
+        if not self.isVisible():
+            return
+        try:
+            xlib, _, dpy = _xsetup()
+            focus = ctypes.c_ulong(0)
+            revert = ctypes.c_int(0)
+            xlib.XGetInputFocus(dpy, ctypes.byref(focus), ctypes.byref(revert))
+            if focus.value != int(self.winId()):
+                xlib.XSetInputFocus(dpy, int(self.winId()), 1, 0)
+                xlib.XFlush(dpy)
+        except Exception:
+            log.exception("focus re-assert failed")
+
     def nudge(self, dx: int, dy: int):
         """Arrow keys: move the frame by single pixels. In the compact
         (sticker) mode the shot is glued to the window, so the window moves."""
@@ -771,7 +810,7 @@ class SnipperWindow(QWidget):
                 and not self._content.isNull() and self._content.width() > 0):
             # already showing a live frame: keep it exactly where it is
             self.raise_()
-            self.activateWindow()
+            self.claim_focus()
             self._pulse_border()
             return True
         rect = self._last_rect
@@ -805,7 +844,7 @@ class SnipperWindow(QWidget):
         self._update_ui_state()
         self.show()
         self.raise_()
-        self.activateWindow()
+        self.claim_focus()
         self._update_mask()
         self._pulse_border()
         return True
@@ -824,6 +863,7 @@ class SnipperWindow(QWidget):
 
     def open_draw(self):
         """Activate in draw mode: crosshair, pull the rectangle from nothing."""
+        self._session_gen += 1  # invalidates captures in flight
         self._enter_overlay_mode()
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -832,11 +872,12 @@ class SnipperWindow(QWidget):
         self._enter_draw_mode()
         self.show()
         self.raise_()
-        self.activateWindow()
+        self.claim_focus()
         self._update_mask()
 
     def start_redraw(self):
         """Close the current rectangle and draw a new one."""
+        self._session_gen += 1  # invalidates captures in flight
         self._enter_overlay_mode()
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -845,11 +886,12 @@ class SnipperWindow(QWidget):
         self._enter_draw_mode()
         self.show()
         self.raise_()
-        self.activateWindow()
+        self.claim_focus()
         self._update_mask()
 
     def open_at(self, cx: int, cy: int):
         """Open with a ready frame at the given point (scripting/tests)."""
+        self._session_gen += 1  # invalidates captures in flight
         self._enter_overlay_mode()
         self._end_session()
         vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -867,7 +909,7 @@ class SnipperWindow(QWidget):
         self.relayout()
         self.show()
         self.raise_()
-        self.activateWindow()
+        self.claim_focus()
         self._pulse_border()
 
     def _pulse_border(self):
@@ -1196,14 +1238,14 @@ class SnipperWindow(QWidget):
     def _enter_sticker_mode(self):
         """Post-capture: switch the widget from the OR full-desktop overlay to
         a MANAGED window hugging the shot, so _NET_WM_STATE_ABOVE (pin) is
-        honored by mutter. The frame keeps its global position."""
+        honored by mutter. The frame keeps its global position. Also the
+        already-sticker path: a re-capture re-shows the sticker (skipping
+        show() used to leave the shot hidden — it looked like a crash)."""
         cg = self.content_global_rect()
-        if not self._bypass:
-            self._set_geometry_keep(self._sticker_want(cg))
-            return
-        self._bypass = False
-        self.setWindowFlag(Qt.X11BypassWindowManagerHint, False)
-        self._content.moveTopLeft(QPoint(PAD, TB_H + GAP + PAD))
+        if self._bypass:
+            self._bypass = False
+            self.setWindowFlag(Qt.X11BypassWindowManagerHint, False)
+            self._content.moveTopLeft(QPoint(PAD, TB_H + GAP + PAD))
         self._set_geometry_keep(self._sticker_want(cg))
         self.show()
         self._update_mask()
@@ -1236,6 +1278,7 @@ class SnipperWindow(QWidget):
 
     def toggle_fullscreen(self):
         self._enter_overlay_mode()
+        self._session_gen += 1  # geometry is about to change; drop captures in flight
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         if self._fullscreen:
             self._fullscreen = False
@@ -1640,12 +1683,44 @@ class SnipperWindow(QWidget):
         self._busy = True
         log.info("capture: start")
         try:
-            self._capture_impl()
+            self._capture_prep()
+        except Exception as ex:
+            self._busy = False
+            log.exception("capture prep failed: %s", ex)
+            return
+        self._session_gen += 1
+        gen = self._session_gen
+        img_rect = QRect(self.content_global_rect())
+
+        def worker():
+            try:
+                img, src = capture.capture_screen()
+                self.capture_result.emit(img, src, gen)
+            except Exception as ex:  # noqa: BLE001 - marshalled to the GUI thread
+                self.capture_result.emit(None, str(ex), gen)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _capture_continuation(self, img, src_path: str, gen: int):
+        """Runs on the GUI thread when the portal round trip finishes. The
+        session generation guard drops results that raced a fresh open."""
+        try:
+            if gen != self._session_gen:
+                log.info("capture: dropped stale result (session changed)")
+                try:
+                    Path(src_path).unlink()
+                except OSError:
+                    pass
+                return
+            if img is None:
+                raise capture.CaptureError(src_path)
+            self._capture_finish(img, src_path)
             log.info("capture: done")
         except Exception as ex:
             log.exception("capture failed: %s", ex)
             self.show()
             self.raise_()
+            self.claim_focus()
             self.size_label.setText(f"capture failed: {ex}")
             self.size_label.show()
             self.relayout()
@@ -1653,7 +1728,7 @@ class SnipperWindow(QWidget):
         finally:
             self._busy = False
 
-    def _capture_impl(self):
+    def _capture_prep(self):
         if self._drag_timer is not None and self._drag_timer.isActive():
             self._drag_timer.stop()
         if not self._content.isNull() and self._content.width() > 0:
@@ -1662,7 +1737,7 @@ class SnipperWindow(QWidget):
         QApplication.processEvents()
         time.sleep(0.15)
 
-        img, src_path = capture.capture_screen()
+    def _capture_finish(self, img, src_path: str):
         dpr = capture.device_pixel_ratio(self.screen())
         crop = capture.crop_image(img, self.content_global_rect(), dpr)
 
@@ -1695,7 +1770,7 @@ class SnipperWindow(QWidget):
 
         self._enter_sticker_mode()
         self.raise_()
-        self.activateWindow()
+        self.claim_focus()
         self._refresh_size_label()
         self._update_ui_state()
         log.info("capture: shown visible=%s geo=%dx%d+%d+%d",

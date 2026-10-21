@@ -88,6 +88,24 @@ Transparent frame → annotate → capture-on-button → floating image (opacity
       hidden overlay. EWMH debugging lesson: read the _NET_WM_STATE
       property and check atoms — do not probe a property literally
       named _NET_WM_STATE_ABOVE.
+- [x] "Occasional crash on screenshot" + "Ctrl+C sometimes dead" (Oct 22):
+      journal forensics showed 49/49 captures OK, zero process deaths —
+      no real crashes. Two actual mechanisms:
+      (1) capture_screen() blocked the GUI thread on q.get() for up to
+      10s (portal stall = app looks crashed). Fixed: portal runs in a
+      worker thread, result marshalled to the GUI thread via a Signal;
+      _session_gen guard drops results that race open_draw/start_redraw/
+      open_at/toggle_fullscreen.
+      (2) after the sticker flag-switch the native window is recreated
+      and activateWindow raced mutter's async map — keyboard focus
+      sometimes stayed elsewhere, so Ctrl+C went to another app. Fixed:
+      claim_focus() after every summon/mode switch (XSetInputFocus
+      direct for OR windows, activateWindow + one re-assert for the
+      managed sticker).
+      (3) bonus: sticker->sticker re-capture left the window HIDDEN
+      (_enter_sticker_mode early path skipped show()) — the shot
+      vanished, reading as a crash. Fixed: both paths share show/mask/
+      above-state now.
 - [x] Ctrl+C reliability: (1) single-instance guarantee — ipc.serve used
       to force-unlink the socket, so a cold start during a busy capture
       stole it and orphaned the previous overlay (stacked overlays,
