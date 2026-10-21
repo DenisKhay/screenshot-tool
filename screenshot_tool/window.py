@@ -380,7 +380,7 @@ class SnipperWindow(QWidget):
         self._content = QRect(0, 0, settings["default_width"], settings["default_height"])
         self._fullscreen = False
         self._pre_fs = None
-        self._pinned = True
+        self._pinned = False
         self._busy = False
         self._bypass = True  # OR full-desktop overlay vs managed sticker
         self._sticker_want_rect = None
@@ -531,8 +531,11 @@ class SnipperWindow(QWidget):
 
         self.btn_copy = mkbtn(self.bar_top, "copy", "Copy image to clipboard", self.copy_image)
         lay_t.addWidget(self.btn_copy, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.btn_pin = mkbtn(self.bar_top, "pin", "Always on top", self.toggle_pin, True)
-        self.btn_pin.setChecked(True)
+        self.btn_pin = mkbtn(self.bar_top, "pin",
+                             "Pin: keep above everything (stays on-screen)\n"
+                             "Unpinned: windows may cover it, may hang off edges",
+                             self.toggle_pin, True)
+        self.btn_pin.setChecked(False)
         lay_t.addWidget(self.btn_pin, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.opacity_slider = QSlider(Qt.Horizontal, self.bar_top)
@@ -1801,7 +1804,8 @@ class SnipperWindow(QWidget):
         self._is_latest = True
         self._shapes = []
 
-        self._enter_sticker_mode()
+        self._apply_pin()
+        self.show()
         self.raise_()
         self.claim_focus()
         self._refresh_size_label()
