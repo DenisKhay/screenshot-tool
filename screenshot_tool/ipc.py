@@ -2,6 +2,24 @@ import os
 from pathlib import Path
 
 SOCKET_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "screenshot-tool.sock"
+LOCK_PATH = SOCKET_PATH.with_suffix(".lock")
+
+
+def try_acquire_lock() -> int | None:
+    """Process-lifetime single-instance lock. Returns the fd held until the
+    process exits, or None when another instance owns it. flock is released
+    by the kernel even on SIGKILL, so stale locks are impossible."""
+    import fcntl
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    return fd
 
 
 def send_command(command: str, timeout: float = 1.0) -> bool:

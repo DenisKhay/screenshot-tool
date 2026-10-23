@@ -5,23 +5,22 @@ faulthandler.enable()
 import os
 import sys
 import threading
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
-
-from .icons import app_icon
+from . import ipc
 from .ipc import send_command, serve
-from .settings import Settings
-from .window import SnipperWindow
 
 REMOTE_ONLY = {"quit", "status"}
 
 
-def build_tray(win: SnipperWindow) -> QSystemTrayIcon:
+def build_tray(win):
     """Resident StatusNotifier tray icon (AppIndicator): the app's taskbar
     presence while nothing is on screen. Left click toggles the frame."""
+    from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+    from .icons import app_icon
+
     tray = QSystemTrayIcon(app_icon(), win)
     menu = QMenu()
     act_toggle = menu.addAction("Show / hide frame")
@@ -52,27 +51,38 @@ def main() -> int:
     if not cmd.startswith("showat:") and cmd not in known:
         ap.error(f"unknown command: {cmd}")
 
-    if send_command(cmd):
-        print(f"sent: {cmd}")
-        return 0
+    # Single instance via a process-lifetime lock, acquired BEFORE the heavy
+    # PySide import: a second command started while the resident was still
+    # importing saw no socket and no owner — and became a second resident
+    # that stole the IPC socket (orphan overlays, dead buttons).
+    lock_fd = ipc.try_acquire_lock()
+    deadline = time.monotonic() + 6.0
+    while lock_fd is None:
+        if send_command(cmd):
+            print(f"sent: {cmd}")
+            return 0
+        lock_fd = ipc.try_acquire_lock()
+        if lock_fd is not None:
+            break  # the previous owner died: we take over
+        if time.monotonic() > deadline:
+            print("another instance is running but is not answering", file=sys.stderr)
+            return 1
+        time.sleep(0.15)
+
     if cmd in REMOTE_ONLY:
         print("not running")
         return 0
 
-    from .ipc import owner_alive
-    if owner_alive():
-        # owner alive but didn't answer within 1s (busy in a capture):
-        # never run as a second instance — hand the command over instead
-        if send_command(cmd, timeout=3):
-            print(f"sent (busy owner): {cmd}")
-            return 0
-        print("another instance is running but is not answering", file=sys.stderr)
-        return 1
+    # lock held: this process is the one true resident — import everything
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    from .settings import Settings
+    from .window import SnipperWindow
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("screenshot-tool")
     app.setApplicationDisplayName("Screenshot Tool")
-    app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
