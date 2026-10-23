@@ -343,6 +343,10 @@ class ScrubSpinBox(QSpinBox):
         if obj is not self.lineEdit():
             return super().eventFilter(obj, ev)
         t = ev.type()
+        if t == QEvent.Type.KeyPress and ev.key() == Qt.Key_Escape:
+            # typing mode off: give the arrows back to the frame
+            self.clearFocus()
+            return True
         if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.LeftButton:
             self._scrubbing = True
             self._scrub_moved = False
@@ -832,7 +836,10 @@ class SnipperWindow(QWidget):
         needs a direct XSetInputFocus (mutter does not manage OR windows); the
         managed sticker goes through activateWindow and re-asserts once — the
         native window is recreated on flag switches and mutter's focus can
-        lose the race against the async map, which used to eat Ctrl+C."""
+        lose the race against the async map, which used to eat Ctrl+C.
+        setFocus() also yanks Qt focus back from child fields (the opacity
+        scrubber) so the arrows always return to the frame."""
+        self.setFocus()
         if self._bypass:
             try:
                 xlib, _, dpy = _xsetup()
@@ -2047,6 +2054,7 @@ class SnipperWindow(QWidget):
         """Esc / ✕: hide. History is kept until cleared with the trash button."""
         if not self._content.isNull() and self._content.width() > 0:
             self._remember_frame(self._content)
+        self.opacity_spin.clearFocus()  # a re-summon must not restore field focus
         self.hide()
 
     def _on_escape(self):
