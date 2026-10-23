@@ -81,7 +81,7 @@ class SettingsDialog(QDialog):
         form.addRow("Default frame size", row)
 
         self.sp_opacity = QSpinBox()
-        self.sp_opacity.setRange(20, 100)
+        self.sp_opacity.setRange(0, 100)
         self.sp_opacity.setValue(int(settings["default_opacity"]))
         self.sp_opacity.setSuffix("%")
         form.addRow("Default image opacity", self.sp_opacity)

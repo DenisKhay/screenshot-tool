@@ -309,9 +309,15 @@ class JumpSlider(QSlider):
 
 
 class ScrubSpinBox(QSpinBox):
-    """Number field whose value can also be scrubbed by dragging the text
-    area horizontally (1 px = 1 unit). A click without movement falls
-    through to normal caret placement for typing."""
+    """Number field whose value can also be scrubbed by dragging (any
+    direction; right/up increases). Motion is RELATIVE with cursor wrapping
+    at screen edges, ~2 screen-heights of travel for the full range. A click
+    without movement falls through to normal caret placement for typing, and
+    focus always returns to the frame after a scrub so the arrow keys keep
+    moving the shot."""
+
+    PX_PER_UNIT = 36.0  # full 0..100 range ~= two-and-a-half screen heights
+    EDGE_WRAP = 6       # px from a screen edge before the cursor wraps around
 
     def __init__(self, lo: int, hi: int, val: int, suffix: str,
                  on_change, parent):
@@ -327,31 +333,66 @@ class ScrubSpinBox(QSpinBox):
         self.lineEdit().setCursor(Qt.CursorShape.SizeHorCursor)
         self.lineEdit().installEventFilter(self)
         self.valueChanged.connect(on_change)
-        self._scrub_x = None
-        self._scrub_val = None
+        self.editingFinished.connect(self.clearFocus)
+        self._scrubbing = False
+        self._scrub_moved = False
+        self._scrub_ref = QPoint()
+        self._scrub_acc = 0.0
 
     def eventFilter(self, obj, ev):
-        if obj is self.lineEdit():
-            t = ev.type()
-            if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.LeftButton:
-                self._scrub_x = ev.globalPosition().toPoint().x()
-                self._scrub_val = self.value()
-                self.lineEdit().deselect()
+        if obj is not self.lineEdit():
+            return super().eventFilter(obj, ev)
+        t = ev.type()
+        if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.LeftButton:
+            self._scrubbing = True
+            self._scrub_moved = False
+            self._scrub_ref = ev.globalPosition().toPoint()
+            self._scrub_acc = 0.0
+            self.lineEdit().deselect()
+            self.lineEdit().grabMouse()
+            return True
+        if t == QEvent.Type.MouseMove and self._scrubbing:
+            self._scrub_step(ev.globalPosition().toPoint())
+            return True
+        if t == QEvent.Type.MouseButtonRelease and self._scrubbing:
+            self._scrubbing = False
+            self.lineEdit().releaseMouse()
+            if self._scrub_moved:
+                self.clearFocus()
                 return True
-            if t == QEvent.Type.MouseMove and self._scrub_x is not None:
-                dx = ev.globalPosition().toPoint().x() - self._scrub_x
-                self.setValue(self._scrub_val + dx)
-                return True
-            if t == QEvent.Type.MouseButtonRelease and self._scrub_x is not None:
-                moved = abs(ev.globalPosition().toPoint().x() - self._scrub_x)
-                self._scrub_x = None
-                if moved <= 2:
-                    # plain click: hand the caret back for typing
-                    self.lineEdit().setFocus()
-                    self.lineEdit().selectAll()
-                    return False
-                return True
+            self.lineEdit().setFocus()
+            self.lineEdit().selectAll()
+            return False
         return super().eventFilter(obj, ev)
+
+    def _scrub_step(self, gp: QPoint):
+        d = gp - self._scrub_ref
+        if d.manhattanLength() > 2:
+            self._scrub_moved = True
+        self._scrub_acc += (d.x() - d.y()) / self.PX_PER_UNIT
+        self._scrub_ref = gp
+        units = int(self._scrub_acc)
+        if units:
+            self.setValue(self.value() + units)
+            self._scrub_acc -= units
+        self._wrap_cursor(gp)
+
+    def _wrap_cursor(self, gp: QPoint):
+        scr = self.screen() or QGuiApplication.primaryScreen()
+        g = scr.geometry()
+        m = self.EDGE_WRAP
+        nx, ny = gp.x(), gp.y()
+        if nx < g.x() + m:
+            nx = g.x() + g.width() - m - 1
+        elif nx > g.x() + g.width() - m:
+            nx = g.x() + m
+        if ny < g.y() + m:
+            ny = g.y() + g.height() - m - 1
+        elif ny > g.y() + g.height() - m:
+            ny = g.y() + m
+        if (nx, ny) != (gp.x(), gp.y()):
+            QCursor.setPos(QPoint(nx, ny))
+            self._scrub_ref = QPoint(nx, ny)
 
 
 class TextEditor(QLineEdit):
@@ -436,7 +477,7 @@ class SnipperWindow(QWidget):
         self._image = None
         self._image_px = None
         self._is_latest = False
-        self._opacity = max(0.2, min(1.0, settings["default_opacity"] / 100))
+        self._opacity = min(1.0, settings["default_opacity"] / 100)
 
         self._tool = TOOL_MOVE
         self._color = QColor(settings["color"])
@@ -587,7 +628,7 @@ class SnipperWindow(QWidget):
         lay_t.addWidget(self.btn_pin, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.opacity_spin = ScrubSpinBox(
-            20, 100, int(self._opacity * 100), "%", self._on_opacity, self.bar_top)
+            0, 100, int(self._opacity * 100), "%", self._on_opacity, self.bar_top)
         self.opacity_spin.setToolTip("Image opacity — drag sideways or type")
         lay_t.addWidget(self.opacity_spin, 0, Qt.AlignmentFlag.AlignVCenter)
         lay_t.addWidget(mksep(self.bar_top))
