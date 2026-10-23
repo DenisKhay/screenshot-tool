@@ -35,6 +35,15 @@ press the capture button.**
 7. `✕` / `Esc` hides the frame; the app stays resident so the hotkey is instant.
    Fully quit with `./shot quit`.
 
+## Development
+
+Run the regression suite before every commit (offscreen, ~5s, no desktop needed):
+
+    .venv/bin/python -m pytest tests -q
+
+Tests are fully isolated: `SCREENSHOT_TOOL_CONFIG_DIR` redirects config and
+`save_dir` to a temp dir, so they never touch real settings or screenshots.
+
 ## Files
 
 - `shot` — launcher/CLI: `shot [toggle|show|hide|capture|quit|status]`
