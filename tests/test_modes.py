@@ -1,6 +1,6 @@
 """Pin / window-mode state machine. Regression: mode switches used to lose
 the frame position, and pin did not change anything at all."""
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, QRect
 from conftest import set_image
 
 
@@ -8,7 +8,7 @@ def test_fresh_capture_starts_unpinned(win):
     set_image(win)
     win._apply_pin()
     win.show()
-    assert win._bypass is True, "fresh shot must live in the OR overlay"
+    assert win._bypass is False, "the shot lives in the managed hug window"
     assert win._pinned is False
 
 
@@ -16,24 +16,43 @@ def test_mode_switch_preserves_frame_position(win):
     set_image(win)
     win._apply_pin()
     g0 = win.content_global_rect().topLeft()
-    win.toggle_pin()  # pin -> managed sticker
-    assert win._bypass is False
+    win.toggle_pin()  # pin -> above everything
+    assert win._pinned is True
     assert win.content_global_rect().topLeft() == g0, "frame jumped on pin"
-    win.toggle_pin()  # unpin -> overlay
-    assert win._bypass is True
+    win.toggle_pin()  # unpin -> normal stacking
+    assert win._pinned is False
     assert win.content_global_rect().topLeft() == g0, "frame jumped on unpin"
 
 
-def test_unpinned_shot_can_go_offscreen(win):
+def test_pin_toggles_the_above_request(win, monkeypatch):
+    import screenshot_tool.window as W
+    calls = []
+    monkeypatch.setattr(W, "set_above_state", lambda w, on: calls.append(on))
+    set_image(win)
+    win._apply_pin()
+    assert calls[-1] is False, "unpinned must not sit in the above layer"
+    win.toggle_pin()
+    assert calls[-1] is True, "pinned must request the above layer"
+
+
+def test_unpinned_shot_keeps_normal_stacking_placement(win):
+    """Unpinned = managed window: the app lets it travel (mutter applies its
+    own on-screen clamp in production). Arrows still move it step by step."""
     set_image(win)
     win._apply_pin()
     win.show()
-    win.nudge(-2000, 0)
-    assert win.content_global_rect().x() < 0, "unpinned shot must cross edges"
-    win.toggle_pin()  # pin: managed window, mutter keeps it on-screen
-    assert win._bypass is False
-    win.toggle_pin()  # unpin again: the off-screen placement is restored
-    assert win._bypass is True
+    g0 = win.content_global_rect().topLeft()
+    for _ in range(50):
+        win.nudge(-1, 0)
+    assert win.content_global_rect().x() == g0.x() - 50
+
+
+def test_offscreen_selection_still_possible_pre_capture(win):
+    """The draw overlay stays OR: a selection frame may cross the edges."""
+    win._drawing = False
+    win._content = QRect(-60, -60, 400, 300)
+    win.nudge(-10, -10)
+    assert (win._content.x(), win._content.y()) == (-70, -70)
 
 
 def test_pin_toggle_in_draw_mode_is_state_only(win):

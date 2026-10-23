@@ -22,11 +22,11 @@ press the capture button.**
 5. Mousedown on the camera button = capture; **keep holding** and you drag the
    captured shot around; body-drag is enabled automatically (Move).
 6. Post-capture: **opacity** number field (drag it sideways to scrub, click
-   to type), **Pin** — captures start *unpinned*: the
-   shot may hang off the screen edges and other windows cover it. Pinning
-   keeps it above everything instead (a pinned shot stays on-screen — that is
-   the window manager's rule, not a choice). History `◀ n/m ▶`
-   (`Shift+←`/`Shift+→`) — historical shots can be re-copied to the
+   to type), **Pin** — the shot is a normal window: other windows cover it
+   per raise order, clicking the shot raises it. Pinning keeps it above
+   everything instead (a pinned shot stays on-screen — the window manager's
+   rule). The selection frame (pre-capture) may cross screen edges. History
+   `◀ n/m ▶` (`Shift+←`/`Shift+→`) — historical shots can be re-copied to the
    clipboard with **Copy** (never automatic). Size label shows the real pixel
    size. **Reset** clears drawings and returns the frame to its default size.
    The `⦚` tools button in the top bar collapses all toolbars into one small

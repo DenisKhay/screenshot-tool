@@ -1401,6 +1401,8 @@ class SnipperWindow(QWidget):
 
     def toggle_pin(self):
         self._pinned = not self._pinned
+        log.info("pin: %s", "on (above everything)" if self._pinned
+                 else "off (normal stacking)")
         self.btn_pin.setChecked(self._pinned)
         if self._image is not None:
             # a captured shot exists: pin state picks the window mode
@@ -1409,14 +1411,11 @@ class SnipperWindow(QWidget):
             self.claim_focus()
 
     def _apply_pin(self):
-        """Pinned: managed hug sticker with _NET_WM_STATE_ABOVE — mutter
-        keeps it above everything but clamps it on-screen. Unpinned: OR
-        full-desktop overlay — mutter ignores OR windows entirely, so the
-        shot may hang off the screen edges and normal windows cover it."""
-        if self._pinned:
-            self._enter_sticker_mode()
-        else:
-            self._enter_overlay_mode()
+        """The shot always lives in the managed hug window; pin toggles
+        _NET_WM_STATE_ABOVE: pinned = mutter keeps it above everything
+        (and on-screen), unpinned = normal stacking — any window can cover
+        it per raise order. The OR overlay is only for drawing/selection."""
+        self._enter_sticker_mode()
 
     def _sticker_want(self, cg=None):
         """Geometry of the managed sticker window: the shot plus room for the
