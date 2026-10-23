@@ -57,5 +57,10 @@ def test_serve_binds_over_stale_socket_file(tmp_path, monkeypatch):
         except OSError:
             time.sleep(0.1)   # serve thread may not have bound yet
     assert delivered, "client could not reach the new resident"
+    # the connection may sit in the backlog before the serve thread processes
+    # it — wait for the handler instead of racing it
+    deadline = time.time() + 2
+    while "probe" not in received and time.time() < deadline:
+        time.sleep(0.05)
     assert "probe" in received
     os.close(fd)

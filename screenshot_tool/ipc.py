@@ -70,6 +70,7 @@ def serve(handler):
         # never steal a live owner's socket: this process must stay the
         # single instance (a stolen socket orphans the previous overlay)
         raise RuntimeError("another screenshot-tool instance owns the IPC socket")
+    print("SERVE: passed guards, binding", SOCKET_PATH, flush=True)
     try:
         SOCKET_PATH.unlink()
     except FileNotFoundError:
