@@ -1,8 +1,12 @@
 import os
 from pathlib import Path
 
-SOCKET_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "screenshot-tool.sock"
+RUNTIME_DIR = Path(os.environ.get(
+    "SCREENSHOT_TOOL_RUNTIME_DIR",
+    os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")))
+SOCKET_PATH = RUNTIME_DIR / "screenshot-tool.sock"
 LOCK_PATH = SOCKET_PATH.with_suffix(".lock")
+_lock_fd = None  # set while this process owns the instance lock
 
 
 def try_acquire_lock() -> int | None:
@@ -10,6 +14,7 @@ def try_acquire_lock() -> int | None:
     process exits, or None when another instance owns it. flock is released
     by the kernel even on SIGKILL, so stale locks are impossible."""
     import fcntl
+    global _lock_fd
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o644)
     try:
@@ -19,6 +24,7 @@ def try_acquire_lock() -> int | None:
         return None
     os.ftruncate(fd, 0)
     os.write(fd, str(os.getpid()).encode())
+    _lock_fd = fd
     return fd
 
 
@@ -53,8 +59,13 @@ def owner_alive(timeout: float = 0.3) -> bool:
 
 
 def serve(handler):
-    """Blocking accept loop; call from a daemon thread. handler(str) is called per command."""
+    """Blocking accept loop; call from a daemon thread after the instance
+    lock is held. handler(str) is called per command."""
     import socket
+    if _lock_fd is None:
+        raise RuntimeError(
+            "serve() requires the instance lock — a resident must have "
+            "acquired it via try_acquire_lock or it can steal sockets")
     if owner_alive():
         # never steal a live owner's socket: this process must stay the
         # single instance (a stolen socket orphans the previous overlay)
