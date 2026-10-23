@@ -16,7 +16,9 @@ DEFAULTS = {
     "history_limit": 20,
 }
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "screenshot-tool"
+CONFIG_DIR = Path(os.environ.get(
+    "SCREENSHOT_TOOL_CONFIG_DIR",
+    os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))) / "screenshot-tool"
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
 
 

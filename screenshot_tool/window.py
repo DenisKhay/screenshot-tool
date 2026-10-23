@@ -491,6 +491,7 @@ class SnipperWindow(QWidget):
 
         self.history = []
         self._hist_idx = -1
+        self._restore_history()
 
         self._pending = None
         self._drag_offset = None
@@ -1077,8 +1078,10 @@ class SnipperWindow(QWidget):
             f"font-size: {self._text_size}px; border: 1px dashed {self._color.name()}; }}"
         )
 
-    def _set_color(self, color: QColor):
+    def _set_color(self, color):
         self._color = QColor(color)
+        self.settings["color"] = QColor(color).name()
+        self.settings.save()
         self.btn_color.setIcon(icons.color_dot_icon(self._color.name()))
         self._refresh_text_style()
         self.update()
@@ -1097,12 +1100,16 @@ class SnipperWindow(QWidget):
 
     def _set_width(self, w: int):
         self._width = int(w)
+        self.settings["stroke_width"] = self._width
+        self.settings.save()
         self._width_preview.set_state(self._color, self._width)
         self._refresh_text_style()
         self.update()
 
     def _set_text_size(self, s: int):
         self._text_size = int(s)
+        self.settings["text_size"] = self._text_size
+        self.settings.save()
         self._textsize_preview.set_state(self._color, self._text_size)
         self._refresh_text_style()
         self.update()
@@ -1316,7 +1323,36 @@ class SnipperWindow(QWidget):
         self._set_width(int(s["stroke_width"]))
         self._set_text_size(int(s["text_size"]))
 
+    def _restore_history(self):
+        """Rebuild history from the save dir after a restart: newest files
+        become the newest entries (the shots are already on disk — each
+        capture saves one)."""
+        out_dir = self.settings.save_dir_path()
+        try:
+            files = sorted(out_dir.iterdir(),
+                           key=lambda p: (p.stat().st_mtime, p.name),
+                           reverse=True)
+        except OSError:
+            return
+        limit = int(self.settings["history_limit"])
+        loaded = []
+        for p in files[:limit]:
+            img = QImage(str(p))
+            if img.isNull():
+                continue
+            loaded.append({"image": img, "base": img.copy(), "imprints": [],
+                           "path": str(p), "files": [str(p)],
+                           "logical": QSize(img.width(), img.height())})
+        self.history = list(reversed(loaded))
+        self._hist_idx = len(self.history) - 1
+
     def clear_history(self):
+        for entry in self.history:
+            for f in entry.get("files", []):
+                try:
+                    Path(f).unlink()
+                except OSError:
+                    pass
         self.history = []
         self._hist_idx = -1
         self._image = None
@@ -1343,6 +1379,8 @@ class SnipperWindow(QWidget):
 
     def _on_opacity(self, v):
         self._opacity = v / 100
+        self.settings["default_opacity"] = int(v)
+        self.settings.save()
         self.update()
 
     def toggle_tools(self):
@@ -1403,21 +1441,20 @@ class SnipperWindow(QWidget):
             self._content.moveTopLeft(QPoint(PAD, TB_H + GAP + PAD))
         self._set_geometry_keep(self._sticker_want(cg))
         self.show()
-        self._update_mask()
+        self.relayout()  # bars/mask re-placed for the new window geometry
         set_above_state(self, self._pinned)
 
     def _enter_overlay_mode(self):
         """Back to the OR full-desktop overlay (drawing/selection)."""
-        if self._bypass:
-            return
-        cg = self.content_global_rect()
-        self._bypass = True
-        self.setWindowFlag(Qt.X11BypassWindowManagerHint, True)
-        vg = QGuiApplication.primaryScreen().virtualGeometry()
-        self._content.moveTopLeft(QPoint(cg.left() - vg.x(), cg.top() - vg.y()))
-        self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
+        if not self._bypass:
+            cg = self.content_global_rect()
+            self._bypass = True
+            self.setWindowFlag(Qt.X11BypassWindowManagerHint, True)
+            vg = QGuiApplication.primaryScreen().virtualGeometry()
+            self._content.moveTopLeft(QPoint(cg.left() - vg.x(), cg.top() - vg.y()))
+            self.setGeometry(vg.x(), vg.y(), self._desktop.width(), self._desktop.height())
         self.show()
-        self._update_mask()
+        self.relayout()  # bars/mask re-placed for the (new) window geometry
 
     def _set_geometry_keep(self, want):
         """setGeometry + settle re-asserts: mutter applies managed-window
@@ -2089,9 +2126,11 @@ class SnipperWindow(QWidget):
                 self.open_at_cursor()
             QTimer.singleShot(1200, self.do_capture)
         elif cmd == "debug":
-            log.info("state: tool=%s editing=%s content=%s window=%s editor=%s width=%s text_size=%s shapes=%d",
-                     self._tool, self._text_editing, self._content, self.geometry(),
+            log.info("state: tool=%s editing=%s pinned=%s content=%s window=%s editor=%s width=%s text_size=%s shapes=%d",
+                     self._tool, self._text_editing, self._pinned, self._content, self.geometry(),
                      self.text_edit.geometry(), self._width, self._text_size, len(self._shapes))
+            log.info("pin button at global %s (bar %s)", self.btn_pin.geometry().translated(
+                self.bar_top.geometry().topLeft()), self.bar_top.geometry())
         elif cmd == "quit":
             QApplication.quit()
 
